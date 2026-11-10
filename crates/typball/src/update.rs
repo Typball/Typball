@@ -20,6 +20,9 @@
 //!   (UNIX 秒) と `commit:` 行を読み (無ければ API の `created_at` = そのコミットの日時)、自分のビルドに
 //!   埋め込まれたコミット日時 (build.rs が git から取る) より新しければ更新。nightly が無い / 古いときは
 //!   安定版の確認も行う。Cargo.toml の番号は nightly の判定に関わらない
+//! - 行き来: 安定版 → 開発版はコミット日時の比較でそのまま移れる。開発版 → 安定版は、nightly のビルドが
+//!   Cargo.toml と同じ番号を持つので番号では「新しくない」になる。安定版チャネルで今のビルドが nightly なら、
+//!   番号が同じ (古い) 安定版も勧めて戻れるようにする ([`decide`])
 //!
 //! 開発中の確認用に、環境変数 `TYPBALL_UPDATE_API` で問い合わせ先 (`.../releases` までの URL) を差し替えられる。
 
@@ -49,6 +52,11 @@ const BUILD_KIND: &str = env!("TYPBALL_BUILD_KIND");
 const SUMS_NAME: &str = "SHA256SUMS.txt";
 /// `download` が中止されたときのエラー文字列
 pub const CANCELLED: &str = "cancelled";
+/// 更新後の再起動で新しいプロセスに渡す引数 (続けて古いプロセスの PID)
+pub const WAIT_PID_ARG: &str = "--wait-pid";
+/// 古いプロセスの終了を待つ上限
+#[cfg(windows)]
+const WAIT_EXIT_TIMEOUT_MS: u32 = 30_000;
 
 /// Release の添付ファイル
 #[derive(Debug, Clone, Deserialize)]
@@ -166,6 +174,29 @@ fn same_commit(a: &str, b: &str) -> bool {
     !a.is_empty() && !b.is_empty() && (a.starts_with(b) || b.starts_with(a))
 }
 
+/// 今動いているビルド (新旧の判定の基準)。判定をテストできるよう値として渡す
+#[derive(Debug, Clone)]
+pub struct Build {
+    /// Cargo.toml の番号 (nightly も同じ番号を持つ)
+    pub version: Version,
+    /// ビルド元のコミット日時 (UNIX 秒、不明なら 0)
+    pub commit_time: u64,
+    pub commit: String,
+    /// CI の nightly ビルドか
+    pub nightly: bool,
+}
+
+impl Build {
+    pub fn current() -> Build {
+        Build {
+            version: current_version(),
+            commit_time: current_commit_time(),
+            commit: current_commit().to_string(),
+            nightly: is_nightly_build(),
+        }
+    }
+}
+
 impl Release {
     pub fn is_nightly(&self) -> bool {
         matches!(self.kind, Kind::Nightly { .. })
@@ -194,16 +225,29 @@ impl Release {
         }
     }
 
-    /// 今動いているビルドより新しいか。安定版は番号、nightly はコミット日時で比べる
-    /// (同じコミットなら日時に関わらず最新)
+    /// 今動いているビルドより新しいか (テスト用。アプリは [`decide`] で判定する)
+    #[cfg(test)]
     pub fn is_newer_than_current(&self) -> bool {
+        self.is_newer_than(&Build::current())
+    }
+
+    /// `build` より新しいか。安定版は番号、nightly はコミット日時で比べる
+    /// (同じコミットなら日時に関わらず最新)。nightly のビルドも Cargo.toml の番号を持つので、
+    /// 同じ番号の安定版は「新しくない」になる (開発版から戻るときは [`decide`] が別に扱う)
+    pub fn is_newer_than(&self, build: &Build) -> bool {
         match &self.kind {
-            Kind::Stable(v) => *v > current_version(),
+            Kind::Stable(v) => *v > build.version,
             Kind::Nightly {
                 commit_time,
                 commit,
-            } => !same_commit(commit, current_commit()) && *commit_time > current_commit_time(),
+            } => !same_commit(commit, &build.commit) && *commit_time > build.commit_time,
         }
+    }
+
+    /// 開発版のビルドから安定版へ戻す提案か (番号は新しくない。ダイアログの文言を変える)
+    pub fn is_switch_to_stable(&self) -> bool {
+        let build = Build::current();
+        build.nightly && !self.is_nightly() && !self.is_newer_than(&build)
     }
 }
 
@@ -245,22 +289,49 @@ fn fetch_release(url: &str) -> Result<Option<Release>, String> {
 pub fn check(channel: Channel) -> Check {
     let base = std::env::var("TYPBALL_UPDATE_API").unwrap_or_else(|_| API_RELEASES.to_string());
     let base = base.trim_end_matches('/');
-    let mut nightly_found = false;
-    if channel == Channel::Nightly {
+    let build = Build::current();
+    let nightly = if channel == Channel::Nightly {
         match fetch_release(&format!("{base}/tags/{NIGHTLY_TAG}")) {
-            Ok(Some(nightly)) if nightly.is_newer_than_current() => {
-                return Check::Available(nightly)
-            }
-            Ok(found) => nightly_found = found.is_some(),
+            // 新しい nightly があれば安定版は見なくてよい
+            Ok(Some(n)) if n.is_newer_than(&build) => return Check::Available(n),
+            Ok(found) => found,
             Err(e) => return Check::Failed(e),
         }
-    }
+    } else {
+        None
+    };
     match fetch_release(&format!("{base}/latest")) {
-        Ok(Some(stable)) if stable.is_newer_than_current() => Check::Available(stable),
-        Ok(Some(_)) => Check::UpToDate,
-        Ok(None) if nightly_found => Check::UpToDate,
-        Ok(None) => Check::NoRelease,
+        Ok(stable) => decide(channel, &build, nightly, stable),
         Err(e) => Check::Failed(e),
+    }
+}
+
+/// 取得した nightly / 安定版のうち、どれを勧めるか。
+///
+/// - 開発版チャネル: 新しい nightly → 番号の新しい安定版 (nightly の Release が無いときなど) の順。
+///   安定版のビルドからでもコミット日時で比べるので、タグ以降の nightly へ移れる
+/// - 安定版チャネル: 番号の新しい安定版。さらに、今のビルドが nightly なら番号が同じ (古い) 安定版も勧める。
+///   nightly のビルドは Cargo.toml と同じ番号を持つので、番号だけで比べると開発版から安定版へ戻れない
+///   (0.1.0 の nightly から見て安定版 0.1.0 は「新しくない」)
+pub fn decide(
+    channel: Channel,
+    build: &Build,
+    nightly: Option<Release>,
+    stable: Option<Release>,
+) -> Check {
+    if channel == Channel::Nightly {
+        if let Some(n) = &nightly {
+            if n.is_newer_than(build) {
+                return Check::Available(n.clone());
+            }
+        }
+    }
+    match stable {
+        Some(s) if s.is_newer_than(build) => Check::Available(s),
+        Some(s) if channel == Channel::Stable && build.nightly => Check::Available(s),
+        Some(_) => Check::UpToDate,
+        None if nightly.is_some() => Check::UpToDate,
+        None => Check::NoRelease,
     }
 }
 
@@ -520,7 +591,11 @@ pub fn apply(package: &Path, kind: InstallKind, reopen: &[PathBuf]) -> Result<()
             let _ = fs::remove_file(&new_exe);
             let _ = fs::remove_file(package);
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            // 新しいプロセスには自分の終了を待たせる (main.rs)。待たずに起動すると、まだ動いている
+            // 自分をシングルインスタンスの先行プロセスとみなし、ファイルを渡して終わってしまう
             Command::new(exe)
+                .arg(WAIT_PID_ARG)
+                .arg(std::process::id().to_string())
                 .args(reopen)
                 .spawn()
                 .map(|_| ())
@@ -529,6 +604,27 @@ pub fn apply(package: &Path, kind: InstallKind, reopen: &[PathBuf]) -> Result<()
         InstallKind::Installer => run_installer(package, reopen),
     }
 }
+
+/// プロセス `pid` の終了を待つ (上限 30 秒)。もう無ければすぐ戻る
+#[cfg(windows)]
+pub fn wait_for_exit(pid: u32) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+    };
+    // SAFETY: 待つための権限だけでハンドルを開き、待ってから閉じる
+    unsafe {
+        let handle = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        if !handle.is_null() {
+            WaitForSingleObject(handle, WAIT_EXIT_TIMEOUT_MS);
+            CloseHandle(handle);
+        }
+    }
+}
+
+/// zip 版の自己更新は Windows だけ
+#[cfg(not(windows))]
+pub fn wait_for_exit(_pid: u32) {}
 
 /// zip から実行ファイル (自分と同じ名前) を取り出す
 fn extract_exe(zip_path: &Path) -> Result<PathBuf, String> {
@@ -676,6 +772,102 @@ mod tests {
         assert!(parse_release(r#"{"tag_name":"nightly","html_url":""}"#).is_err());
         assert!(same_commit("abc1234", "abc1234def5678") && !same_commit("", "abc"));
         assert!(version_label().starts_with(env!("CARGO_PKG_VERSION")));
+    }
+
+    fn stable(v: &str) -> Release {
+        Release {
+            kind: Kind::Stable(Version::parse(v).unwrap()),
+            asset_prefix: format!("typball-{v}"),
+            title: String::new(),
+            notes: String::new(),
+            url: String::new(),
+            assets: Vec::new(),
+        }
+    }
+
+    fn nightly(commit_time: u64, commit: &str) -> Release {
+        Release {
+            kind: Kind::Nightly {
+                commit_time,
+                commit: commit.to_string(),
+            },
+            asset_prefix: "typball-nightly".to_string(),
+            title: String::new(),
+            notes: String::new(),
+            url: String::new(),
+            assets: Vec::new(),
+        }
+    }
+
+    fn build(version: &str, commit_time: u64, commit: &str, nightly: bool) -> Build {
+        Build {
+            version: Version::parse(version).unwrap(),
+            commit_time,
+            commit: commit.to_string(),
+            nightly,
+        }
+    }
+
+    /// 勧められた版の表記 (無ければ "up-to-date" / "no-release")
+    fn offer(check: Check) -> String {
+        match check {
+            Check::Available(r) => r.label(),
+            Check::UpToDate => "up-to-date".to_string(),
+            Check::NoRelease => "no-release".to_string(),
+            Check::Failed(e) => format!("failed: {e}"),
+        }
+    }
+
+    /// 安定版と開発版を行き来できるか。時系列: コミット c0 (t=1000) で v0.1.0 を公開 (nightly も c0)、
+    /// c2 (t=2000) は 0.1.0 のままの開発、c3 (t=3000) で 0.1.1 に上げて公開 (nightly も c3)
+    #[test]
+    fn channels_can_be_switched_both_ways() {
+        use Channel::{Nightly, Stable};
+        let n0 = || nightly(1000, "c0");
+        let n2 = || nightly(2000, "c2");
+        let n3 = || nightly(3000, "c3");
+        let s010 = || stable("0.1.0");
+        let s011 = || stable("0.1.1");
+        let n_c2 = nightly(2000, "c2").label();
+        let n_c3 = nightly(3000, "c3").label();
+
+        // 安定版 0.1.0 (c0) を使っている
+        let st = build("0.1.0", 1000, "c0", false);
+        assert_eq!(offer(decide(Stable, &st, None, Some(s010()))), "up-to-date");
+        assert_eq!(offer(decide(Stable, &st, None, Some(s011()))), "0.1.1");
+        // → 開発版チャネルにすると、タグ以降の nightly へ移れる (同じコミットの nightly は勧めない)
+        assert_eq!(offer(decide(Nightly, &st, Some(n2()), Some(s010()))), n_c2);
+        assert_eq!(
+            offer(decide(Nightly, &st, Some(n0()), Some(s010()))),
+            "up-to-date"
+        );
+
+        // 開発版 (0.1.0 のまま、c2) を使っている
+        let nb = build("0.1.0", 2000, "c2", true);
+        assert_eq!(
+            offer(decide(Nightly, &nb, Some(n2()), Some(s010()))),
+            "up-to-date"
+        );
+        assert_eq!(offer(decide(Nightly, &nb, Some(n3()), Some(s011()))), n_c3);
+        // nightly の Release が作り直しの最中で無くても、番号の新しい安定版は勧める
+        assert_eq!(offer(decide(Nightly, &nb, None, Some(s011()))), "0.1.1");
+        // → 安定版チャネルに戻すと、番号が同じでも安定版 0.1.0 へ戻れる
+        assert_eq!(offer(decide(Stable, &nb, None, Some(s010()))), "0.1.0");
+        assert!(!s010().is_newer_than(&nb));
+        // 安定版がまだ無ければ戻り先は無い
+        assert_eq!(offer(decide(Stable, &nb, None, None)), "no-release");
+
+        // 安定版 0.1.0 に戻った後は、同じ 0.1.0 を勧め続けない
+        let back = build("0.1.0", 1000, "c0", false);
+        assert_eq!(
+            offer(decide(Stable, &back, None, Some(s010()))),
+            "up-to-date"
+        );
+
+        // Release が 1 つも無い / nightly だけある
+        assert_eq!(offer(decide(Stable, &st, None, None)), "no-release");
+        assert_eq!(offer(decide(Nightly, &nb, Some(n2()), None)), "up-to-date");
+        assert_eq!(offer(decide(Nightly, &st, Some(n0()), None)), "up-to-date");
     }
 
     #[test]

@@ -79,10 +79,12 @@ use window::WindowRef;
 
 /// コマンドライン: 開き方 (`--edit` = エディタ、`--view` = プレビュー専用ウィンドウ。どちらも無ければ
 /// 形式ごとの設定 `[filetypes.*] open_mode`)、`--new-instance` (先行プロセスに渡さず別プロセスで起動)、
+/// `--wait-pid <pid>` (更新で再起動したとき: 古いプロセスの終了を待ってから起動する)、
 /// 開くファイル (絶対パスにして返す)
 struct Args {
     mode: Option<OpenMode>,
     new_instance: bool,
+    wait_pid: Option<u32>,
     files: Vec<PathBuf>,
 }
 
@@ -91,9 +93,11 @@ fn parse_args() -> Args {
     let mut args = Args {
         mode: None,
         new_instance: false,
+        wait_pid: None,
         files: Vec::new(),
     };
-    for arg in std::env::args_os().skip(1) {
+    let mut raw = std::env::args_os().skip(1);
+    while let Some(arg) = raw.next() {
         if arg == "--view" || arg == "-v" {
             args.mode = Some(OpenMode::Viewer);
             continue;
@@ -104,6 +108,10 @@ fn parse_args() -> Args {
         }
         if arg == "--new-instance" {
             args.new_instance = true;
+            continue;
+        }
+        if arg == update::WAIT_PID_ARG {
+            args.wait_pid = raw.next().and_then(|v| v.to_str()?.parse().ok());
             continue;
         }
         let p = PathBuf::from(arg);
@@ -117,8 +125,14 @@ fn parse_args() -> Args {
 }
 
 fn main() {
-    let (loaded, load_error) = Settings::load();
     let args = parse_args();
+    // 更新で再起動した: 古いプロセスが終わるのを待つ。待たないと、まだ動いている古いプロセスを
+    // 「先に動いている Typball」とみなしてファイルを渡して終わってしまう (シングルインスタンス)。
+    // 古いプロセスが閉じるときに保存する設定 (ウィンドウの位置) を読むためにも、設定より先に待つ
+    if let Some(pid) = args.wait_pid {
+        update::wait_for_exit(pid);
+    }
+    let (loaded, load_error) = Settings::load();
 
     // シングルインスタンス: 先に動いている Typball があればファイルを渡して、このプロセスは終わる
     // (GUI を作る前に済ませるので、ダブルクリックしたファイルはすぐ既存のウィンドウに出る)

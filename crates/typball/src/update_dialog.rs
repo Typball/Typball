@@ -185,11 +185,14 @@ fn show_release_dialog(frame: &Frame, release: &Release, can_install: bool) -> C
     // 寸法は DIP で書き、ダイアログのある画面の拡大率で実ピクセルにする
     let px = |v: i32| dialog.from_dip_int(v);
 
-    // 開発版 (nightly) はその旨を見出しで断る
+    // 開発版 (nightly) はその旨を、開発版から安定版へ戻すときはそのことを見出しで断る
+    let switch_to_stable = release.is_switch_to_stable();
     let headline = StaticText::builder(&dialog)
         .with_label(&tr_args(
             if release.is_nightly() {
                 "update.available_nightly"
+            } else if switch_to_stable {
+                "update.switch_to_stable"
             } else {
                 "update.available"
             },
@@ -222,10 +225,12 @@ fn show_release_dialog(frame: &Frame, release: &Release, can_install: bool) -> C
 
     let install = Button::builder(&dialog)
         .with_id(ID_OK)
-        .with_label(&tr(if can_install {
-            "update.install"
-        } else {
+        .with_label(&tr(if !can_install {
             "update.open_releases"
+        } else if switch_to_stable {
+            "update.install_switch"
+        } else {
+            "update.install"
         }))
         .build();
     let skip = Button::builder(&dialog)
