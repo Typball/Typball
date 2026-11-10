@@ -21,7 +21,7 @@ use wxdragon::prelude::*;
 use crate::document::Document;
 use crate::filetype::FileType;
 use crate::i18n::{tr, tr_args};
-use crate::preview::{paint_preview, render_preview, Preview, BG, SCROLL_UNIT};
+use crate::preview::{paint_preview, render_preview, Preview, SCROLL_UNIT};
 use crate::settings;
 use crate::webpreview::{self, WebPreview};
 use crate::window;
@@ -100,6 +100,7 @@ impl Viewer {
         // メインウィンドウと同じ大きさ (DIP) で、画面の中央に出す
         crate::winplace::restore(&frame, &settings.window, None);
         crate::appicon::apply(&frame);
+        crate::window::watch_system_theme(&frame);
         let status = frame.create_status_bar(1, STATUS_BAR_STYLE, -1, "status");
         let _ = status;
 
@@ -126,7 +127,7 @@ impl Viewer {
             FileType::Typ => {
                 let win = ScrolledWindow::builder(&body).build();
                 win.set_scroll_rate(SCROLL_UNIT, SCROLL_UNIT);
-                win.set_background_color(Colour::new(BG.0, BG.1, BG.2, 255));
+                win.set_background_color(crate::preview::bg());
                 win.set_background_style(BackgroundStyle::Paint);
                 fill(&body, &win);
                 Content::Typst(Rc::new(RefCell::new(Preview {
@@ -359,6 +360,34 @@ pub fn apply_settings(before: &settings::Settings, after: &settings::Settings) {
                     ctrl.set_font(&font);
                 }
             }
+        }
+    }
+}
+
+/// 開いているプレビューウィンドウ
+pub fn frames() -> Vec<Frame> {
+    VIEWERS.with(|v| v.borrow().iter().map(|x| x.frame).collect())
+}
+
+/// 配色の明暗が変わった: プレビューウィンドウを描き直す
+pub fn apply_theme(changed: crate::theme::Changed) {
+    if !changed.preview && !changed.ui {
+        return;
+    }
+    let viewers: Vec<Rc<Viewer>> = VIEWERS.with(|v| v.borrow().clone());
+    for viewer in viewers {
+        if changed.preview {
+            match &viewer.content {
+                Content::Typst(_) => viewer.render(),
+                Content::Web(web) => {
+                    viewer.render();
+                    web.reload_page();
+                }
+                Content::Text(_) => {}
+            }
+        }
+        if changed.ui {
+            viewer.frame.refresh(true, None);
         }
     }
 }

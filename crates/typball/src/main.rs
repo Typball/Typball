@@ -146,6 +146,9 @@ fn main() {
         fonts::register_embedded();
         i18n::set_language(&loaded.general.language);
         settings::set(loaded.clone());
+        // ライト / ダーク。最初のウィンドウを作る前に決めておく (後からでも切り替えられるが、
+        // 一度ライトで描いてから塗り直すのでちらつく)
+        theme::init_ui(&loaded);
         // Typst の既定フォント (文書が #set text(font:) で指定しないときに使う)
         typball_core::set_default_text(&loaded.preview.font_face, loaded.preview.font_size as f64);
 

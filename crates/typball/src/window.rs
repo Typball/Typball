@@ -29,7 +29,7 @@ use crate::settings::{self, ExternalChange, LastTab, LineNumbers, Settings, Wrap
 use crate::settings_dialog;
 use crate::tab::{status_widths, Tab, TabHost, STATUS_FIELD_WIDTHS};
 use crate::tabbar::{DragTarget, TabBar};
-use crate::theme::{contains, inflate};
+use crate::theme::{self, contains, inflate};
 use crate::update_dialog;
 
 /// wxID_PREFERENCES。macOS ではこの ID のメニュー項目がアプリメニューの「設定…」に移される。
@@ -273,6 +273,9 @@ fn build_window(position: Option<Point>) -> WindowRef {
             }
         }
     });
+
+    // 配色 (ライト / ダーク) が変わったら塗り直す (OS の切り替え・設定の変更)
+    watch_system_theme(&frame);
 
     let panel = Panel::builder(&frame).build();
     let tabbar = TabBar::new(&panel);
@@ -1641,20 +1644,24 @@ fn error_dialog(frame: &Frame, message: &str) {
 fn open_settings(win: &WindowRef) {
     let frame = win.borrow().frame;
     let before = settings::get();
-    let Some(after) = settings_dialog::show(&frame, &before) else {
+    let Some(outcome) = settings_dialog::show(&frame, &before) else {
         return;
     };
-    if after == before {
-        return;
+    let after = outcome.settings;
+    if after != before {
+        settings::set(after.clone());
+        if let Err(e) = after.save() {
+            status(
+                &frame,
+                &tr_args("status.settings_save_error", &[("error", &e)]),
+            );
+        }
+        apply_settings(&before, &after);
     }
-    settings::set(after.clone());
-    if let Err(e) = after.save() {
-        status(
-            &frame,
-            &tr_args("status.settings_save_error", &[("error", &e)]),
-        );
+    // 設定の「更新を今すぐ確認」(反映した後のチャネルで確認する)
+    if outcome.check_update {
+        update_dialog::check_now(win);
     }
-    apply_settings(&before, &after);
 }
 
 /// 設定を 1 か所変えて保存し、全ウィンドウに反映する (表示メニューからの変更用)
@@ -1684,6 +1691,14 @@ fn apply_settings(before: &Settings, after: &Settings) {
     // Typst の既定フォント (文書が #set text で指定しないとき)。タブの組み直しより先に
     typball_core::set_default_text(&after.preview.font_face, after.preview.font_size as f64);
     crate::viewer::apply_settings(before, after);
+    // 配色。ウィンドウ (wx の部品) は wx に指示し、開いている全ウィンドウを塗り直させる
+    if after.general.theme != before.general.theme {
+        theme::set_appearance(after.general.theme);
+        let mut frames: Vec<Frame> = all_windows().iter().map(|w| w.borrow().frame).collect();
+        frames.extend(crate::viewer::frames());
+        theme::repaint_native(&frames);
+    }
+    let theme_changed = theme::refresh(after);
     let tabs_changed = after.editor != before.editor
         || after.filetypes != before.filetypes
         || after.files != before.files
@@ -1703,6 +1718,38 @@ fn apply_settings(before: &Settings, after: &Settings) {
         // 表示メニューのチェック (折り返し・行番号など) を合わせる
         update_dynamic_menus(&win);
     }
+    apply_theme(theme_changed);
+}
+
+/// 配色の変更 (wx の SysColourChanged) を見張る。メインウィンドウとプレビューウィンドウに付ける。
+/// OS のライト / ダークの切り替えのほか、設定でウィンドウの配色を変えたときも届く
+/// (theme::repaint_native が WM_SYSCOLORCHANGE を送る)。明暗を決め直し、変わった部分
+/// (エディタ・プレビュー・自前描画) を塗り直す。wx の部品は wx 自身が塗り直す
+pub fn watch_system_theme(frame: &Frame) {
+    use wxdragon::event::{EventType, WxEvtHandler};
+    frame.bind_internal(EventType::SYS_COLOUR_CHANGED, |event| {
+        // wx 自身の処理 (子ウィンドウへの伝播) を止めない
+        event.skip(true);
+        apply_theme(theme::refresh(&settings::get()));
+    });
+}
+
+/// 明暗の変わった部分を全ウィンドウで塗り直す
+fn apply_theme(changed: theme::Changed) {
+    if changed == theme::Changed::default() {
+        return;
+    }
+    let settings = settings::get();
+    for win in all_windows() {
+        let tabs = win.borrow().tabs.clone();
+        for tab in &tabs {
+            tab.apply_theme(changed, &settings);
+        }
+        if changed.ui {
+            win.borrow().frame.refresh(true, None);
+        }
+    }
+    crate::viewer::apply_theme(changed);
 }
 
 /// バージョン情報

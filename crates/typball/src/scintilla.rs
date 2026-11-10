@@ -85,6 +85,26 @@ fn send_str(stc: &StyledTextCtrl, msg: i32, wp: usize, text: &str) -> isize {
     send(stc, msg, wp, c.as_ptr() as isize)
 }
 
+const SCI_SETSELFORE: i32 = 2067;
+const SCI_SETSELBACK: i32 = 2068;
+const SCI_SETCARETFORE: i32 = 2069;
+
+/// 0xRRGGBB → Scintilla の色 (0xBBGGRR)
+fn sci_colour(rgb: u32) -> isize {
+    (((rgb & 0xff) << 16) | (rgb & 0xff00) | ((rgb >> 16) & 0xff)) as isize
+}
+
+/// キャレットの色
+pub fn set_caret_fore(stc: &StyledTextCtrl, rgb: u32) {
+    send(stc, SCI_SETCARETFORE, sci_colour(rgb) as usize, 0);
+}
+
+/// 選択範囲の背景色。文字色は各スタイルのまま (SETSELFORE を使わない)
+pub fn set_sel_back(stc: &StyledTextCtrl, rgb: u32) {
+    send(stc, SCI_SETSELFORE, 0, 0);
+    send(stc, SCI_SETSELBACK, 1, sci_colour(rgb));
+}
+
 /// Scintilla 自身の右クリックメニュー (英語の Undo / Cut / Copy ...) を出さないようにする。
 /// 代わりに wx の wxEVT_CONTEXT_MENU が親へ伝わるので、そこで自前のメニューを出す (tab.rs)
 pub fn disable_popup(stc: &StyledTextCtrl) {

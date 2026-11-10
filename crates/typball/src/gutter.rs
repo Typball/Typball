@@ -7,9 +7,7 @@
 
 use wxdragon::prelude::*;
 
-use crate::editor::{
-    self, rgb, LineChange, GUTTER_BG, GUTTER_FG, GUTTER_FG_MODIFIED, GUTTER_FG_SAVED,
-};
+use crate::editor::{self, rgb, LineChange};
 use crate::scintilla;
 use crate::settings::{self, Settings};
 use crate::theme;
@@ -76,9 +74,10 @@ fn ruler_height(stc: &StyledTextCtrl) -> i32 {
 fn paint_ruler(panel: &Panel, stc: &StyledTextCtrl) {
     let dc = AutoBufferedPaintDC::new(panel);
     let Size { width, height } = panel.get_client_size();
-    dc.set_background(rgb(GUTTER_BG));
+    let c = editor::colors();
+    dc.set_background(rgb(c.gutter_bg));
     dc.clear();
-    dc.set_pen(rgb(0x9e9e9e), 1, PenStyle::Solid);
+    dc.set_pen(rgb(c.ruler_line), 1, PenStyle::Solid);
     dc.draw_line(0, height - 1, width, height - 1);
 
     // 目盛りの数字は UI フォント (設定のフォントはエディタの中身だけ)。ズームには追従する
@@ -86,7 +85,7 @@ fn paint_ruler(panel: &Panel, stc: &StyledTextCtrl) {
         return;
     };
     dc.set_font(&label_font);
-    dc.set_text_foreground(rgb(GUTTER_FG));
+    dc.set_text_foreground(rgb(c.gutter_fg));
 
     // 列 0 の x 座標 (横スクロールしていれば負になる) と 1 列の幅
     let first_doc = scintilla::doc_line_from_visible(stc, scintilla::first_visible_line(stc));
@@ -100,7 +99,7 @@ fn paint_ruler(panel: &Panel, stc: &StyledTextCtrl) {
     } else {
         0
     };
-    dc.set_pen(rgb(0x6a6a6a), 1, PenStyle::Solid);
+    dc.set_pen(rgb(c.ruler_tick), 1, PenStyle::Solid);
     loop {
         let x = origin + col * unit;
         if x >= right {
@@ -126,8 +125,8 @@ fn paint_ruler(panel: &Panel, stc: &StyledTextCtrl) {
     // キャレット位置の黒いマーカー (下半分、幅 5 DIP)
     let caret_x = scintilla::point_x_from_position(stc, stc.get_current_pos());
     if caret_x >= 0 && caret_x < right {
-        dc.set_pen(rgb(editor::SEPARATOR_COLOR), 1, PenStyle::Solid);
-        dc.set_brush(rgb(editor::SEPARATOR_COLOR), BrushStyle::Solid);
+        dc.set_pen(rgb(c.separator), 1, PenStyle::Solid);
+        dc.set_brush(rgb(c.separator), BrushStyle::Solid);
         let w = panel.from_dip_int(5) | 1;
         dc.draw_rectangle(caret_x - w / 2, height / 2, w, height - 1 - height / 2);
     }
@@ -196,9 +195,10 @@ fn gutter_width(stc: &StyledTextCtrl, settings: &Settings) -> i32 {
 fn paint_gutter(panel: &Panel, stc: &StyledTextCtrl) {
     let dc = AutoBufferedPaintDC::new(panel);
     let Size { width, height } = panel.get_client_size();
-    dc.set_background(rgb(GUTTER_BG));
+    let c = editor::colors();
+    dc.set_background(rgb(c.gutter_bg));
     dc.clear();
-    dc.set_pen(rgb(editor::SEPARATOR_COLOR), 1, PenStyle::Solid);
+    dc.set_pen(rgb(c.separator), 1, PenStyle::Solid);
     dc.draw_line(0, 0, 0, height);
 
     let settings = settings::get();
@@ -232,8 +232,8 @@ fn paint_gutter(panel: &Panel, stc: &StyledTextCtrl) {
             LineChange::Unchanged
         };
         let strip_colour = match change {
-            LineChange::Modified => Some(editor::MODIFIED_COLOR),
-            LineChange::Saved => Some(editor::SAVED_COLOR),
+            LineChange::Modified => Some(c.modified),
+            LineChange::Saved => Some(c.saved),
             LineChange::Unchanged => None,
         };
         if let Some(colour) = strip_colour {
@@ -243,9 +243,9 @@ fn paint_gutter(panel: &Panel, stc: &StyledTextCtrl) {
             dc.draw_rectangle(width - strip, y, strip, line_h * rows);
         }
         let (font, fg) = match change {
-            LineChange::Modified => (&bold, GUTTER_FG_MODIFIED),
-            LineChange::Saved => (&normal, GUTTER_FG_SAVED),
-            LineChange::Unchanged => (&normal, GUTTER_FG),
+            LineChange::Modified => (&bold, c.gutter_fg_modified),
+            LineChange::Saved => (&normal, c.gutter_fg_saved),
+            LineChange::Unchanged => (&normal, c.gutter_fg),
         };
         dc.set_font(font);
         dc.set_text_foreground(rgb(fg));

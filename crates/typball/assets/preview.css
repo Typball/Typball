@@ -1,6 +1,7 @@
-/* Markdown プレビューの見た目 (GitHub 風)。ライト / ダークは OS の設定に従う */
+/* Markdown プレビューの見た目 (GitHub 風)。ライト / ダークは <html data-theme> で切り替える
+   (Typball の設定 preview.theme。「システムに従う」も Typball 側で決めて入れる) */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --fg: #1f2328;
   --fg-muted: #59636e;
   --bg: #ffffff;
@@ -15,22 +16,21 @@
   --alert-warning: #9a6700;
   --alert-caution: #cf222e;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --fg: #e6edf3;
-    --fg-muted: #9198a1;
-    --bg: #0d1117;
-    --bg-subtle: #161b22;
-    --border: #3d444d;
-    --link: #4493f8;
-    --code-bg: #161b22;
-    --mark-bg: #3a2d00;
-    --alert-note: #4493f8;
-    --alert-tip: #3fb950;
-    --alert-important: #ab7df8;
-    --alert-warning: #d29922;
-    --alert-caution: #f85149;
-  }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --fg: #e6edf3;
+  --fg-muted: #9198a1;
+  --bg: #0d1117;
+  --bg-subtle: #161b22;
+  --border: #3d444d;
+  --link: #4493f8;
+  --code-bg: #161b22;
+  --mark-bg: #3a2d00;
+  --alert-note: #4493f8;
+  --alert-tip: #3fb950;
+  --alert-important: #ab7df8;
+  --alert-warning: #d29922;
+  --alert-caution: #f85149;
 }
 
 html, body {

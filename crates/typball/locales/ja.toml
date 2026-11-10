@@ -212,6 +212,7 @@ title = "一般"
 language = "表示言語:"
 language_system = "システムの言語に従う"
 language_note = "言語の変更はメニューにすぐ反映されます。開いているダイアログは次回開いたときに切り替わります。"
+theme = "ウィンドウの配色:"
 last_tab = "最後のタブを閉じたとき:"
 last_tab_keep = "空のタブを開いたままにする"
 last_tab_close = "ウィンドウを閉じる (最後のウィンドウなら終了)"
@@ -223,6 +224,7 @@ instance_single = "起動中の Typball でファイルを開く (--new-instance
 instance_multiple = "別の Typball として起動する (タブの移動は同じプロセス内だけ)"
 
 [settings.editor]
+theme = "配色:"
 title = "エディタ"
 font_face = "フォント:"
 font_size = "フォントサイズ (pt):"
@@ -336,6 +338,7 @@ restarting = "更新を適用して Typball を再起動します..."
 cancelled = "更新を中止しました"
 
 [settings.preview]
+theme = "配色:"
 title = "プレビュー"
 font_face = "フォント:"
 font_size = "フォントサイズ (pt):"
@@ -356,4 +359,11 @@ channel = "更新チャネル:"
 channel_stable = "安定版 (番号を付けて公開された版だけ)"
 channel_nightly = "開発版も含める (push ごとの最新ビルド、nightly)"
 interval = "確認の間隔 (時間):"
-note = "GitHub の Releases ({url}) を見に行きます。ネットワークにつながらないときは何もしません。手動で確認するにはヘルプ → 更新を確認。開発版はテストされていない変更を含みます。お使いの Typball は v{version} です。"
+check_now = "設定を反映して今すぐ確認(&C)"
+note = "GitHub の Releases ({url}) を見に行きます。\nネットワークにつながらないときは何もしません。\n開発版はテストされていない変更を含みます。\n今すぐ確認するには下のボタンか、ヘルプ → 更新を確認を使います。\nお使いの Typball は v{version} です。"
+
+[settings.theme]
+# 配色の選択肢 (ウィンドウ・エディタ・プレビュー共通)
+system = "システムに従う"
+light = "ライト"
+dark = "ダーク"

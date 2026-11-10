@@ -679,14 +679,14 @@ impl TabBar {
         let Size { width, height } = self.panel.get_client_size();
         let dip = Dip::of(&self.panel);
         let d = |v: i32| dip.px(v);
-        dc.set_background(rgb(theme::BAR_BG));
+        dc.set_background(rgb(theme::ui().bar_bg));
         dc.clear();
         let st = self.state.borrow();
         if let Some(f) = &st.font {
             dc.set_font(f);
         }
         // 下の境界線 (選択中のタブの下だけ空ける)
-        dc.set_pen(rgb(theme::BORDER), 1, PenStyle::Solid);
+        dc.set_pen(rgb(theme::ui().border), 1, PenStyle::Solid);
         dc.draw_line(0, height - 1, width, height - 1);
 
         let dragging = st.drag.as_ref().filter(|d| d.moving);
@@ -702,8 +702,8 @@ impl TabBar {
                 Some(r) => r.x,
                 None => st.rects.last().map(|r| r.x + r.width).unwrap_or(d(4)),
             };
-            dc.set_pen(rgb(theme::DROP_MARKER), 1, PenStyle::Solid);
-            dc.set_brush(rgb(theme::DROP_MARKER), BrushStyle::Solid);
+            dc.set_pen(rgb(theme::ui().drop_marker), 1, PenStyle::Solid);
+            dc.set_brush(rgb(theme::ui().drop_marker), BrushStyle::Solid);
             let bar = d(3);
             dc.draw_rectangle(x - bar / 2, d(2), bar, height - d(3));
             let tri = [
@@ -739,11 +739,11 @@ impl TabBar {
         let radius = dip.pxf(5.0);
         let top = if selected { d(2) } else { d(4) };
         let bg = if selected {
-            theme::TAB_ACTIVE
+            theme::ui().tab_active
         } else if hovered || floating {
-            theme::TAB_HOVER
+            theme::ui().tab_hover
         } else {
-            theme::TAB_INACTIVE
+            theme::ui().tab_inactive
         };
         // タブ本体 (上だけ角丸: 角丸矩形を下へはみ出させて描く)
         dc.set_clipping_region(rect.x, top, rect.width, rect.height - top);
@@ -757,17 +757,27 @@ impl TabBar {
             radius,
             bg,
         );
-        dc.set_pen(rgb(theme::BORDER), 1, PenStyle::Solid);
+        dc.set_pen(rgb(theme::ui().border), 1, PenStyle::Solid);
         dc.set_brush(rgb(bg), BrushStyle::Transparent);
         dc.draw_rounded_rectangle(rect.x, top, rect.width, rect.height - top + below, radius);
         dc.destroy_clipping_region();
         if selected && !floating {
             // ページとつなげる: 下の境界線を消す
-            dc.set_pen(rgb(theme::TAB_ACTIVE), 1, PenStyle::Solid);
+            dc.set_pen(rgb(theme::ui().tab_active), 1, PenStyle::Solid);
             dc.draw_line(
                 rect.x + 1,
                 rect.height - 1,
                 rect.x + rect.width - 1,
+                rect.height - 1,
+            );
+        } else {
+            // 選択されていないタブは下の境界線の奥に置く (タブ本体が線を塗りつぶすので引き直す)。
+            // 選択中のタブだけがページとつながり、手前にあるように見える
+            dc.set_pen(rgb(theme::ui().border), 1, PenStyle::Solid);
+            dc.draw_line(
+                rect.x,
+                rect.height - 1,
+                rect.x + rect.width,
                 rect.height - 1,
             );
         }
@@ -788,9 +798,9 @@ impl TabBar {
         let label = ellipsize(&self.panel, &label_of(item), (text_right - text_x).max(0));
         let (_, th) = dc.get_text_extent(&label);
         dc.set_text_foreground(rgb(if selected {
-            theme::TEXT
+            theme::ui().text
         } else {
-            theme::TEXT_DIM
+            theme::ui().text_dim
         }));
         dc.set_clipping_region(text_x, top, (text_right - text_x).max(0), rect.height - top);
         dc.draw_text(&label, text_x, top + (rect.height - top - th) / 2);
@@ -808,7 +818,7 @@ impl TabBar {
                     c.width,
                     c.height,
                     dip.pxf(3.0),
-                    theme::CLOSE_HOVER,
+                    theme::ui().close_hover,
                 );
             }
             draw_cross(
@@ -817,7 +827,7 @@ impl TabBar {
                 c.y + c.height / 2,
                 d(7),
                 dip.pen(),
-                if hot { 0xffffff } else { theme::TEXT_DIM },
+                if hot { 0xffffff } else { theme::ui().text_dim },
             );
         }
     }
@@ -840,10 +850,10 @@ pub fn paint_icon(dc: &dyn DeviceContext, filetype: FileType, x: i32, y: i32, si
     let pen = s(1).max(1);
     match filetype {
         FileType::Txt => {
-            dc.set_pen(rgb(0x8a8a8a), pen, PenStyle::Solid);
-            dc.set_brush(rgb(0xffffff), BrushStyle::Solid);
+            dc.set_pen(rgb(theme::ui().icon_edge), pen, PenStyle::Solid);
+            dc.set_brush(rgb(theme::ui().icon_paper), BrushStyle::Solid);
             dc.draw_rectangle(x + s(2), y + s(1), s(12), s(14));
-            dc.set_pen(rgb(0x9a9a9a), pen, PenStyle::Solid);
+            dc.set_pen(rgb(theme::ui().icon_line), pen, PenStyle::Solid);
             for i in 0..4 {
                 let ly = y + s(4 + i * 3);
                 dc.draw_line(x + s(4), ly, x + s(12 - if i == 3 { 4 } else { 0 }), ly);

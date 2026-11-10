@@ -212,6 +212,9 @@ fn show_release_dialog(frame: &Frame, release: &Release, can_install: bool) -> C
         release.notes.clone()
     };
     notes.set_value(&notes_text);
+    // 複数行の TextCtrl は中身の行数 (最大 10 行) を最小の高さにするので、長いリリースノートだと
+    // ダイアログの最小の高さが膨らみ、小さい画面でボタンが下にはみ出す。小さく抑えて残りを伸ばす
+    notes.set_min_size(dialog.from_dip(Size::new(200, 80)));
     let link = HyperlinkCtrl::builder(&dialog)
         .with_label(&tr("update.open_releases"))
         .with_url(&release.url)
@@ -239,8 +242,8 @@ fn show_release_dialog(frame: &Frame, release: &Release, can_install: bool) -> C
     });
     install.set_default();
 
+    // リンクはボタンと同じ行に置かない (日本語のボタン 3 つと並べると幅が足りなくなる)
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    buttons.add(&link, 0, SizerFlag::AlignCenterVertical, 0);
     buttons.add_stretch_spacer(1);
     buttons.add(&skip, 0, SizerFlag::Right, px(8));
     buttons.add(&later, 0, SizerFlag::Right, px(8));
@@ -260,15 +263,33 @@ fn show_release_dialog(frame: &Frame, release: &Release, can_install: bool) -> C
         px(12),
     );
     root.add(&notes, 1, SizerFlag::Expand | SizerFlag::All, px(12));
+    root.add(
+        &link,
+        0,
+        SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
+        px(12),
+    );
     root.add_sizer(
         &buttons,
         0,
         SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
         px(12),
     );
-    dialog.set_sizer(root, true);
-    dialog.set_min_size(dialog.from_dip(Size::new(480, 320)));
-    dialog.set_size(dialog.from_dip(Size::new(560, 420)));
+    // 最小サイズは中身 (見出しの折り返し・ボタンの幅) から求める。固定値だと言語や拡大率によっては
+    // ボタンが入りきらず、ウィンドウを縮めたときに隠れる
+    dialog.set_sizer_and_fit(root, true);
+    let fitted = dialog.get_size();
+    let floor = dialog.from_dip(Size::new(480, 320));
+    let min = Size::new(
+        fitted.width.max(floor.width),
+        fitted.height.max(floor.height),
+    );
+    dialog.set_min_size(min);
+    let want = dialog.from_dip(Size::new(560, 420));
+    dialog.set_size(Size::new(
+        want.width.max(min.width),
+        want.height.max(min.height),
+    ));
     dialog.centre();
     dialog.layout();
 

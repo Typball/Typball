@@ -161,9 +161,9 @@ impl ActionBar {
         let dc = AutoBufferedPaintDC::new(&self.panel);
         let Size { width, height } = self.panel.get_client_size();
         let dip = Dip::of(&self.panel);
-        dc.set_background(rgb(theme::BAR_BG));
+        dc.set_background(rgb(theme::ui().bar_bg));
         dc.clear();
-        dc.set_pen(rgb(theme::BORDER), 1, PenStyle::Solid);
+        dc.set_pen(rgb(theme::ui().border), 1, PenStyle::Solid);
         dc.draw_line(0, height - 1, width, height - 1);
 
         let st = self.state.borrow();
@@ -180,9 +180,9 @@ impl ActionBar {
                     r.height,
                     dip.pxf(4.0),
                     if pressed {
-                        theme::PRESSED_BG
+                        theme::ui().pressed_bg
                     } else {
-                        theme::HOVER_BG
+                        theme::ui().hover_bg
                     },
                 );
             }
@@ -204,7 +204,7 @@ fn bar_items(filetype: FileType) -> Vec<Action> {
 fn paint_glyph(dc: &dyn DeviceContext, action: Action, cx: i32, cy: i32, dip: Dip) {
     let d = |v: i32| dip.px(v);
     let pen = dip.pen();
-    let fg = theme::TEXT;
+    let fg = theme::ui().text;
     let text = |s: &str, bold: bool, italic: bool, delta: i32| {
         if let Some(font) = theme::ui_font(bold, italic, delta) {
             dc.set_font(&font);
@@ -227,7 +227,7 @@ fn paint_glyph(dc: &dyn DeviceContext, action: Action, cx: i32, cy: i32, dip: Di
             let r = dip.pxf(3.0);
             dc.draw_rounded_rectangle(cx - d(9), cy - d(3), d(10), d(7), r);
             dc.draw_rounded_rectangle(cx - d(1), cy - d(3), d(10), d(7), r);
-            dc.set_pen(rgb(theme::BAR_BG), d(2), PenStyle::Solid);
+            dc.set_pen(rgb(theme::ui().bar_bg), d(2), PenStyle::Solid);
             dc.draw_line(cx - d(1), cy - d(4), cx - d(1), cy + d(5));
             dc.set_pen(rgb(fg), pen, PenStyle::Solid);
             dc.draw_line(cx - d(3), cy, cx + d(3), cy);
@@ -248,7 +248,7 @@ fn paint_glyph(dc: &dyn DeviceContext, action: Action, cx: i32, cy: i32, dip: Di
         }
         Action::ExportPdf => {
             // 右上が折れた紙に "PDF"
-            dc.set_brush(rgb(0xffffff), BrushStyle::Solid);
+            dc.set_brush(rgb(theme::ui().icon_paper), BrushStyle::Solid);
             dc.set_pen(rgb(0xc0392b), pen, PenStyle::Solid);
             let pts = [(-7, -9), (3, -9), (7, -5), (7, 9), (-7, 9)]
                 .map(|(x, y)| DcPoint::new(cx + d(x), cy + d(y)));

@@ -62,14 +62,87 @@ pub fn change_strip_width(stc: &StyledTextCtrl, settings: &Settings) -> i32 {
     }
 }
 
-/// 行番号まわりの配色 (左マージンと右側の自前描画で共通)
-pub const GUTTER_BG: u32 = 0xf5f5f5;
-pub const GUTTER_FG: u32 = 0x8a8a8a;
-pub const GUTTER_FG_MODIFIED: u32 = 0x1a1a1a;
-pub const GUTTER_FG_SAVED: u32 = 0x2f6db5;
-pub const MODIFIED_COLOR: u32 = 0xf0a030;
-pub const SAVED_COLOR: u32 = 0x5aa0e0;
-pub const SEPARATOR_COLOR: u32 = 0x000000;
+/// エディタの配色 (本文・行番号・ルーラー。設定 `editor.theme` で明暗を選ぶ)
+pub struct EditorColors {
+    /// 本文の背景
+    pub bg: u32,
+    /// 本文 (タグの無いテキスト)
+    pub text: u32,
+    /// 行番号まわり (左マージンと右側の自前描画で共通) の地
+    pub gutter_bg: u32,
+    pub gutter_fg: u32,
+    pub gutter_fg_modified: u32,
+    pub gutter_fg_saved: u32,
+    /// 編集行の帯 (未保存 / 保存済み)
+    pub modified: u32,
+    pub saved: u32,
+    /// 行番号と本文の境界線、ルーラーのキャレット位置
+    pub separator: u32,
+    /// ルーラーの目盛りと下線
+    pub ruler_tick: u32,
+    pub ruler_line: u32,
+    pub caret: u32,
+    pub caret_line: u32,
+    pub selection: u32,
+    /// raw ブロックの背景
+    pub raw_bg: u32,
+    /// 対応括弧の強調
+    pub brace_bg: u32,
+    pub brace_fg: u32,
+    pub brace_bad: u32,
+}
+
+const LIGHT: EditorColors = EditorColors {
+    bg: 0xffffff,
+    text: 0x1a1a1a,
+    gutter_bg: 0xf5f5f5,
+    gutter_fg: 0x8a8a8a,
+    gutter_fg_modified: 0x1a1a1a,
+    gutter_fg_saved: 0x2f6db5,
+    modified: 0xf0a030,
+    saved: 0x5aa0e0,
+    separator: 0x000000,
+    ruler_tick: 0x6a6a6a,
+    ruler_line: 0x9e9e9e,
+    caret: 0x000000,
+    caret_line: 0xf3f3f3,
+    selection: 0xc0c0c0,
+    raw_bg: 0xf2f2f2,
+    brace_bg: 0xffe97a,
+    brace_fg: 0x1a1a1a,
+    brace_bad: 0xff0000,
+};
+
+/// VS Code Dark+ 風
+const DARK: EditorColors = EditorColors {
+    bg: 0x1e1e1e,
+    text: 0xd4d4d4,
+    gutter_bg: 0x252526,
+    gutter_fg: 0x858585,
+    gutter_fg_modified: 0xe6e6e6,
+    gutter_fg_saved: 0x6aa7ff,
+    modified: 0xd7962c,
+    saved: 0x3d7fc8,
+    separator: 0x9a9a9a,
+    ruler_tick: 0x8a8a8a,
+    ruler_line: 0x4a4a4a,
+    caret: 0xaeafad,
+    caret_line: 0x2a2d2e,
+    selection: 0x264f78,
+    raw_bg: 0x2a2a2a,
+    brace_bg: 0x515c6a,
+    brace_fg: 0xffffff,
+    brace_bad: 0xf44747,
+};
+
+/// 今のエディタの配色
+pub fn colors() -> &'static EditorColors {
+    if crate::theme::editor_dark() {
+        &DARK
+    } else {
+        &LIGHT
+    }
+}
 
 pub fn rgb(hex: u32) -> Colour {
     Colour::new(
@@ -85,32 +158,33 @@ fn style_of(tag: Tag) -> i32 {
     tag as i32 + 1
 }
 
-/// 各タグの配色 (VS Code Light+ 風)。(前景色, 太字, 斜体, 下線)
-fn tag_appearance(tag: Tag) -> (u32, bool, bool, bool) {
-    match tag {
-        Tag::Comment => (0x008000, false, true, false),
-        Tag::Punctuation => (0x5a5a5a, false, false, false),
-        Tag::Escape => (0xee0000, false, false, false),
-        Tag::Strong => (0x1a1a1a, true, false, false),
-        Tag::Emph => (0x1a1a1a, false, true, false),
-        Tag::Link => (0x0066cc, false, false, true),
-        Tag::Raw => (0x6a3e3e, false, false, false),
-        Tag::Label => (0x8b008b, false, false, false),
-        Tag::Ref => (0x8b008b, false, false, false),
-        Tag::Heading => (0x0033aa, true, false, false),
-        Tag::ListMarker => (0x8b008b, true, false, false),
-        Tag::ListTerm => (0x1a1a1a, true, false, false),
-        Tag::MathDelimiter => (0x1a6e9a, false, false, false),
-        Tag::MathOperator => (0x1a6e9a, false, false, false),
-        Tag::MathGroupingParens => (0x1a6e9a, false, false, false),
-        Tag::Keyword => (0xaf00db, false, false, false),
-        Tag::Operator => (0x4a4a4a, false, false, false),
-        Tag::Number => (0x098658, false, false, false),
-        Tag::String => (0xa31515, false, false, false),
-        Tag::Function => (0x795e26, false, false, false),
-        Tag::Interpolated => (0x0070c1, false, false, false),
-        Tag::Error => (0xff0000, false, false, true),
-    }
+/// 各タグの配色 (ライトは VS Code Light+ 風、ダークは Dark+ 風)。(前景色, 太字, 斜体, 下線)
+fn tag_appearance(tag: Tag, dark: bool) -> (u32, bool, bool, bool) {
+    let (light, dark_fg, bold, italic, underline) = match tag {
+        Tag::Comment => (0x008000, 0x6a9955, false, true, false),
+        Tag::Punctuation => (0x5a5a5a, 0x9a9a9a, false, false, false),
+        Tag::Escape => (0xee0000, 0xd7ba7d, false, false, false),
+        Tag::Strong => (0x1a1a1a, 0xe6e6e6, true, false, false),
+        Tag::Emph => (0x1a1a1a, 0xe6e6e6, false, true, false),
+        Tag::Link => (0x0066cc, 0x4daafc, false, false, true),
+        Tag::Raw => (0x6a3e3e, 0xce9178, false, false, false),
+        Tag::Label => (0x8b008b, 0xc586c0, false, false, false),
+        Tag::Ref => (0x8b008b, 0xc586c0, false, false, false),
+        Tag::Heading => (0x0033aa, 0x569cd6, true, false, false),
+        Tag::ListMarker => (0x8b008b, 0xc586c0, true, false, false),
+        Tag::ListTerm => (0x1a1a1a, 0xe6e6e6, true, false, false),
+        Tag::MathDelimiter => (0x1a6e9a, 0x4ec9b0, false, false, false),
+        Tag::MathOperator => (0x1a6e9a, 0x4ec9b0, false, false, false),
+        Tag::MathGroupingParens => (0x1a6e9a, 0x4ec9b0, false, false, false),
+        Tag::Keyword => (0xaf00db, 0xc586c0, false, false, false),
+        Tag::Operator => (0x4a4a4a, 0xb4b4b4, false, false, false),
+        Tag::Number => (0x098658, 0xb5cea8, false, false, false),
+        Tag::String => (0xa31515, 0xce9178, false, false, false),
+        Tag::Function => (0x795e26, 0xdcdcaa, false, false, false),
+        Tag::Interpolated => (0x0070c1, 0x9cdcfe, false, false, false),
+        Tag::Error => (0xff0000, 0xf44747, false, false, true),
+    };
+    (if dark { dark_fg } else { light }, bold, italic, underline)
 }
 
 const ALL_TAGS: [Tag; 22] = [
@@ -185,9 +259,8 @@ pub fn setup_editor(stc: &StyledTextCtrl, settings: &Settings) {
 
     apply_colors(stc, settings);
 
-    // 現在行の強調
+    // 現在行の強調 (色は apply_colors)
     stc.set_caret_line_visible(true);
-    stc.set_caret_line_background(rgb(0xf3f3f3));
 
     apply_settings(stc, settings);
 }
@@ -198,16 +271,18 @@ fn apply_colors(stc: &StyledTextCtrl, settings: &Settings) {
     if let Some(f) = font(settings, 0, false) {
         stc.style_set_font(STYLE_DEFAULT, &f);
     }
-    // 既定スタイルの前景色は境界線マージン (MarginType::Fore) の色にもなるので黒にし、
+    let c = colors();
+    // 既定スタイルの前景色は境界線マージン (MarginType::Fore) の色にもなるので境界線の色にし、
     // 本文 (タグの無いテキスト = スタイル 0) は style_clear_all の後で少し柔らかい色にする
-    stc.style_set_foreground(STYLE_DEFAULT, rgb(SEPARATOR_COLOR));
-    stc.style_set_background(STYLE_DEFAULT, rgb(0xffffff));
+    stc.style_set_foreground(STYLE_DEFAULT, rgb(c.separator));
+    stc.style_set_background(STYLE_DEFAULT, rgb(c.bg));
     // 既定スタイルを全スタイルにコピーしてから個別に上書き
     stc.style_clear_all();
-    stc.style_set_foreground(0, rgb(0x1a1a1a));
+    stc.style_set_foreground(0, rgb(c.text));
 
+    let dark = crate::theme::editor_dark();
     for tag in ALL_TAGS {
-        let (fg, bold, italic, underline) = tag_appearance(tag);
+        let (fg, bold, italic, underline) = tag_appearance(tag, dark);
         let s = style_of(tag);
         stc.style_set_foreground(s, rgb(fg));
         stc.style_set_bold(s, bold);
@@ -215,28 +290,33 @@ fn apply_colors(stc: &StyledTextCtrl, settings: &Settings) {
         stc.style_set_underline(s, underline);
     }
     // raw ブロックは背景を薄く
-    stc.style_set_background(style_of(Tag::Raw), rgb(0xf2f2f2));
+    stc.style_set_background(style_of(Tag::Raw), rgb(c.raw_bg));
 
     // 行番号マージン。STYLE_LINENUMBER の背景色がマージン全体の地になり、
     // 文字は行ごとに STYLE_MARGIN / STYLE_MARGIN_MODIFIED (太字) / STYLE_MARGIN_SAVED で描かれる
-    stc.style_set_foreground(STYLE_LINENUMBER, rgb(GUTTER_FG));
-    stc.style_set_background(STYLE_LINENUMBER, rgb(GUTTER_BG));
+    stc.style_set_foreground(STYLE_LINENUMBER, rgb(c.gutter_fg));
+    stc.style_set_background(STYLE_LINENUMBER, rgb(c.gutter_bg));
     for (style, fg, bold) in [
-        (STYLE_MARGIN, GUTTER_FG, false),
-        (STYLE_MARGIN_MODIFIED, GUTTER_FG_MODIFIED, true),
-        (STYLE_MARGIN_SAVED, GUTTER_FG_SAVED, false),
+        (STYLE_MARGIN, c.gutter_fg, false),
+        (STYLE_MARGIN_MODIFIED, c.gutter_fg_modified, true),
+        (STYLE_MARGIN_SAVED, c.gutter_fg_saved, false),
     ] {
         stc.style_set_foreground(style, rgb(fg));
-        stc.style_set_background(style, rgb(GUTTER_BG));
+        stc.style_set_background(style, rgb(c.gutter_bg));
         stc.style_set_bold(style, bold);
     }
 
     // 対応括弧の強調 (黄色背景 + 太字) / 不一致 (赤)
-    stc.style_set_background(STYLE_BRACELIGHT, rgb(0xffe97a));
-    stc.style_set_foreground(STYLE_BRACELIGHT, rgb(0x1a1a1a));
+    stc.style_set_background(STYLE_BRACELIGHT, rgb(c.brace_bg));
+    stc.style_set_foreground(STYLE_BRACELIGHT, rgb(c.brace_fg));
     stc.style_set_bold(STYLE_BRACELIGHT, true);
-    stc.style_set_foreground(STYLE_BRACEBAD, rgb(0xff0000));
+    stc.style_set_foreground(STYLE_BRACEBAD, rgb(c.brace_bad));
     stc.style_set_bold(STYLE_BRACEBAD, true);
+
+    // キャレット・現在行・選択範囲
+    scintilla::set_caret_fore(stc, c.caret);
+    stc.set_caret_line_background(rgb(c.caret_line));
+    scintilla::set_sel_back(stc, c.selection);
 }
 
 /// 設定ダイアログで変えられる項目を既存のエディタに反映する
@@ -298,8 +378,8 @@ pub fn update_margins(stc: &StyledTextCtrl, settings: &Settings) {
         MarkerSymbol::Empty
     };
     for (marker, colour) in [
-        (MARKER_MODIFIED, MODIFIED_COLOR),
-        (MARKER_SAVED, SAVED_COLOR),
+        (MARKER_MODIFIED, colors().modified),
+        (MARKER_SAVED, colors().saved),
     ] {
         stc.marker_define_symbol(marker, symbol, rgb(colour), rgb(colour));
     }

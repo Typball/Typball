@@ -395,7 +395,7 @@ impl WebPreview {
             doc_id: self.id,
             base_dir: base_dir.as_deref(),
             version: self.version.get(),
-            dark: wxdragon::appearance::is_system_dark_mode(),
+            dark: crate::theme::preview_dark(),
         };
         let out = mdhtml::render(text, &ctx);
         {
@@ -651,7 +651,7 @@ fn mime_for(path: &Path) -> &'static str {
 fn page_html(doc: &DocState) -> String {
     format!(
         concat!(
-            "<!DOCTYPE html><html><head><meta charset=\"utf-8\">",
+            "<!DOCTYPE html><html data-theme=\"{theme}\"><head><meta charset=\"utf-8\">",
             "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'self'; ",
             "img-src 'self' data: https: http:; media-src 'self' data: https: http:; ",
             "style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; ",
@@ -662,6 +662,11 @@ fn page_html(doc: &DocState) -> String {
             "<script src=\"/assets/preview.js\"></script>",
             "</head><body><article id=\"content\" class=\"markdown-body\">{body}</article></body></html>"
         ),
+        theme = if crate::theme::preview_dark() {
+            "dark"
+        } else {
+            "light"
+        },
         title = mdhtml::escape_html(&doc.title),
         font_css = font_css(&settings::get()),
         body = doc.body

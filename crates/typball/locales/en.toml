@@ -212,6 +212,7 @@ title = "General"
 language = "Language:"
 language_system = "Follow system language"
 language_note = "The menu updates immediately. Dialogs switch the next time they are opened."
+theme = "Window theme:"
 last_tab = "When the last tab is closed:"
 last_tab_keep = "Keep an empty tab open"
 last_tab_close = "Close the window (quit if it is the last one)"
@@ -223,6 +224,7 @@ instance_single = "Open the files in the running Typball (--new-instance starts 
 instance_multiple = "Start another Typball (tabs move only within one process)"
 
 [settings.editor]
+theme = "Theme:"
 title = "Editor"
 font_face = "Font:"
 font_size = "Font size (pt):"
@@ -336,6 +338,7 @@ restarting = "Applying the update and restarting Typball..."
 cancelled = "Update cancelled"
 
 [settings.preview]
+theme = "Theme:"
 title = "Preview"
 font_face = "Font:"
 font_size = "Font size (pt):"
@@ -355,4 +358,11 @@ channel = "Update channel:"
 channel_stable = "Stable (numbered releases only)"
 channel_nightly = "Include development builds (latest build per push, nightly)"
 interval = "Check interval (hours):"
-note = "Looks at the GitHub Releases page ({url}). Nothing happens when the network is unavailable. Use Help > Check for Updates to check manually. Development builds contain untested changes. You are running v{version}."
+check_now = "Apply and &Check Now"
+note = "Looks at the GitHub Releases page ({url}). Nothing happens when the network is unavailable. Use the button below or Help > Check for Updates to check now. Development builds contain untested changes. You are running v{version}."
+
+[settings.theme]
+# Theme choices (window, editor and preview)
+system = "Follow system"
+light = "Light"
+dark = "Dark"

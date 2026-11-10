@@ -248,9 +248,9 @@ impl PaneHeader {
         let Size { width, height } = self.panel.get_client_size();
         let dip = Dip::of(&self.panel);
         let d = |v: i32| dip.px(v);
-        dc.set_background(rgb(theme::HEADER_BG));
+        dc.set_background(rgb(theme::ui().header_bg));
         dc.clear();
-        dc.set_pen(rgb(theme::BORDER), 1, PenStyle::Solid);
+        dc.set_pen(rgb(theme::ui().border), 1, PenStyle::Solid);
         dc.draw_line(0, height - 1, width, height - 1);
 
         let st = self.state.borrow();
@@ -258,8 +258,8 @@ impl PaneHeader {
             dc.set_font(f);
         }
         // つかめることが分かるように左端に 2 列の点々 (グリップ)
-        dc.set_pen(rgb(0xa0a0a0), 1, PenStyle::Solid);
-        dc.set_brush(rgb(0xa0a0a0), BrushStyle::Solid);
+        dc.set_pen(rgb(theme::ui().grip), 1, PenStyle::Solid);
+        dc.set_brush(rgb(theme::ui().grip), BrushStyle::Solid);
         let dot = d(2);
         for row in 0..3 {
             for col in 0..2 {
@@ -268,7 +268,7 @@ impl PaneHeader {
         }
         let title = theme::ellipsize(&self.panel, &st.title, (width - d(BTN * 3 + 28)).max(0));
         let (_, th) = dc.get_text_extent(&title);
-        dc.set_text_foreground(rgb(theme::TEXT_DIM));
+        dc.set_text_foreground(rgb(theme::ui().text_dim));
         dc.draw_text(&title, d(16), (height - th) / 2);
 
         for button in BUTTONS {
@@ -284,15 +284,15 @@ impl PaneHeader {
                     r.height,
                     dip.pxf(3.0),
                     if pressed {
-                        theme::PRESSED_BG
+                        theme::ui().pressed_bg
                     } else {
-                        theme::HOVER_BG
+                        theme::ui().hover_bg
                     },
                 );
             }
             let (cx, cy) = (r.x + r.width / 2, r.y + r.height / 2);
-            dc.set_pen(rgb(theme::TEXT_DIM), dip.pen(), PenStyle::Solid);
-            dc.set_brush(rgb(theme::TEXT_DIM), BrushStyle::Solid);
+            dc.set_pen(rgb(theme::ui().text_dim), dip.pen(), PenStyle::Solid);
+            dc.set_brush(rgb(theme::ui().text_dim), BrushStyle::Solid);
             match button {
                 HeaderButton::Menu => {
                     // 下向きの小さな三角
@@ -304,7 +304,7 @@ impl PaneHeader {
                     dc.draw_polygon(&pts, 0, 0, PolygonFillMode::OddEven);
                 }
                 HeaderButton::Float => {
-                    paint_float_icon(&dc, cx, cy, theme::TEXT_DIM, st.floating, dip)
+                    paint_float_icon(&dc, cx, cy, theme::ui().text_dim, st.floating, dip)
                 }
                 HeaderButton::Collapse => paint_chevron(&dc, cx, cy, st.edge, dip),
             }
@@ -490,7 +490,7 @@ impl DropIndicator {
                 let Size { width, height } = panel.get_client_size();
                 let dip = Dip::of(&panel);
                 let border = dip.px(2).max(2);
-                dc.set_background(rgb(theme::DROP_MARKER));
+                dc.set_background(rgb(theme::ui().drop_marker));
                 dc.clear();
                 dc.set_pen(rgb(0xffffff), border, PenStyle::Solid);
                 dc.set_brush(rgb(0xffffff), BrushStyle::Transparent);
@@ -749,14 +749,14 @@ impl Strip {
         let dc = AutoBufferedPaintDC::new(&self.panel);
         let Size { width, height } = self.panel.get_client_size();
         let radius = Dip::of(&self.panel).pxf(4.0);
-        dc.set_background(rgb(theme::BAR_BG));
+        dc.set_background(rgb(theme::ui().bar_bg));
         dc.clear();
         let st = self.state.borrow();
         if let Some(f) = &st.font {
             dc.set_font(f);
         }
         // 内側 (エディタ側) の境界線
-        dc.set_pen(rgb(theme::BORDER), 1, PenStyle::Solid);
+        dc.set_pen(rgb(theme::ui().border), 1, PenStyle::Solid);
         match st.edge {
             PanePosition::Left => dc.draw_line(width - 1, 0, width - 1, height),
             PanePosition::Right => dc.draw_line(0, 0, 0, height),
@@ -764,15 +764,15 @@ impl Strip {
         }
         for (i, ((_, title), r)) in st.items.iter().zip(&st.rects).enumerate() {
             let bg = if st.hover == Some(i) {
-                theme::TAB_HOVER
+                theme::ui().tab_hover
             } else {
-                theme::TAB_INACTIVE
+                theme::ui().tab_inactive
             };
             fill_round_rect(&dc, r.x, r.y, r.width, r.height, radius, bg);
-            dc.set_pen(rgb(theme::BORDER), 1, PenStyle::Solid);
+            dc.set_pen(rgb(theme::ui().border), 1, PenStyle::Solid);
             dc.set_brush(rgb(bg), BrushStyle::Transparent);
             dc.draw_rounded_rectangle(r.x, r.y, r.width, r.height, radius);
-            dc.set_text_foreground(rgb(theme::TEXT_DIM));
+            dc.set_text_foreground(rgb(theme::ui().text_dim));
             let (tw, th) = dc.get_text_extent(title);
             if st.edge.is_side() {
                 // 下から上へ読む向きに 90 度回す。(x, y) は回転前の文字列の左上

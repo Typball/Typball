@@ -35,6 +35,21 @@ pub struct Settings {
     pub instance: Instance,
 }
 
+/// 配色 (ウィンドウ・エディタ・プレビューで別々に選ぶ)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    /// OS の設定 (アプリのモード) に従う
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl Theme {
+    pub const ALL: [Theme; 3] = [Self::System, Self::Light, Self::Dark];
+}
+
 /// Typball をもう一度起動したとき (関連付けのダブルクリックなど) にどうするか
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -131,6 +146,9 @@ pub struct Preview {
     pub site_command: String,
     /// WebView に表示する URL。`{port}` が置き換わる
     pub site_url: String,
+    /// プレビューの配色。Typst は暗いとき明るさを反転して描き、Markdown は CSS を切り替える
+    /// (サイトモードはサイト自身の CSS に任せる)
+    pub theme: Theme,
 }
 
 impl Default for Preview {
@@ -142,6 +160,7 @@ impl Default for Preview {
             // -D: 下書きも出す、-N: 保存したページへ移動、-M: 出力をディスクに書かない
             site_command: "hugo server -D -N -M --port {port} -s {root}".to_string(),
             site_url: "http://localhost:{port}/".to_string(),
+            theme: Theme::System,
         }
     }
 }
@@ -218,6 +237,8 @@ pub struct General {
     pub language: String,
     /// ウィンドウの最後のタブを閉じたときの動作
     pub last_tab: LastTab,
+    /// ウィンドウ (メニュー・タブ・ペイン・ダイアログ) の配色
+    pub theme: Theme,
 }
 
 impl Default for General {
@@ -225,6 +246,7 @@ impl Default for General {
         Self {
             language: crate::i18n::SYSTEM.to_string(),
             last_tab: LastTab::default(),
+            theme: Theme::System,
         }
     }
 }
@@ -319,6 +341,8 @@ pub struct Editor {
     pub saved_changes: SavedChanges,
     /// エディタ上部に文字位置のルーラーを表示する
     pub show_ruler: bool,
+    /// エディタ (本文・行番号・ルーラー) の配色
+    pub theme: Theme,
 }
 
 /// 既定のエディタフォント: 同梱の UDEV Gothic (日本語対応の等幅で、半角と全角が 1:2。どの OS でも同じ)。
@@ -337,6 +361,7 @@ impl Default for Editor {
             highlight_changes: true,
             saved_changes: SavedChanges::Keep,
             show_ruler: true,
+            theme: Theme::System,
         }
     }
 }

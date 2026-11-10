@@ -1,35 +1,222 @@
 //! 自前描画する部品 (タブバー・ペインのヘッダ・アクションバー) で共通の配色とフォント、
-//! ドラッグ中に出すカーソルの生成
+//! ドラッグ中に出すカーソルの生成、ライト / ダークの判定
+//!
+//! 配色はウィンドウ・エディタ・プレビューで別々に選べる (設定の `theme`)。どれが暗いかは
+//! [`refresh`] で決めて覚えておき、描画のたびに [`ui`] / [`editor_dark`] / [`preview_dark`] で引く。
+//! ウィンドウ (wx の部品) の明暗は [`set_appearance`] で wx に指示する (起動時と設定の変更時)。
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use wxdragon::dc::{Point as DcPoint, PolygonFillMode};
 use wxdragon::prelude::*;
 
 use crate::editor::rgb;
+use crate::settings::{Settings, Theme};
 
-/// バーの背景 (ウィンドウの背景と同系の薄いグレー)
-pub const BAR_BG: u32 = 0xf0f0f0;
-/// バーやタブの境界線
-pub const BORDER: u32 = 0xc8c8c8;
-/// 選択されていないタブ
-pub const TAB_INACTIVE: u32 = 0xe2e2e2;
-/// マウスが乗っているタブ
-pub const TAB_HOVER: u32 = 0xebebeb;
-/// 選択中のタブ (ページと同じ白でつながって見える)
-pub const TAB_ACTIVE: u32 = 0xffffff;
-/// 通常の文字色
-pub const TEXT: u32 = 0x1a1a1a;
-/// 控えめな文字色 (ヘッダのタイトルなど)
-pub const TEXT_DIM: u32 = 0x505050;
-/// ボタンにマウスが乗ったときの背景
-pub const HOVER_BG: u32 = 0xd6d6d6;
-/// ボタンを押している間の背景
-pub const PRESSED_BG: u32 = 0xc0c0c0;
-/// 閉じるボタンにマウスが乗ったときの背景 (Windows 風の赤)
-pub const CLOSE_HOVER: u32 = 0xe81123;
-/// ペインのヘッダの背景
-pub const HEADER_BG: u32 = 0xe8e8e8;
-/// タブバーの挿入位置マーカーと ↓ バッジの色
-pub const DROP_MARKER: u32 = 0x0b5cad;
+/// 自前で描く部品の配色
+pub struct UiPalette {
+    /// バーの背景 (ウィンドウの背景と同系)
+    pub bar_bg: u32,
+    /// バーやタブの境界線
+    pub border: u32,
+    /// 選択されていないタブ
+    pub tab_inactive: u32,
+    /// マウスが乗っているタブ
+    pub tab_hover: u32,
+    /// 選択中のタブ (ページとつながって見える色)
+    pub tab_active: u32,
+    /// 通常の文字色
+    pub text: u32,
+    /// 控えめな文字色 (ヘッダのタイトルなど)
+    pub text_dim: u32,
+    /// ボタンにマウスが乗ったときの背景
+    pub hover_bg: u32,
+    /// ボタンを押している間の背景
+    pub pressed_bg: u32,
+    /// 閉じるボタンにマウスが乗ったときの背景 (Windows 風の赤)
+    pub close_hover: u32,
+    /// ペインのヘッダの背景
+    pub header_bg: u32,
+    /// タブバーの挿入位置マーカーと ↓ バッジの色
+    pub drop_marker: u32,
+    /// ペインのつまみ (ドラッグできる印)
+    pub grip: u32,
+    /// タブの文書アイコンの紙と線
+    pub icon_paper: u32,
+    pub icon_edge: u32,
+    pub icon_line: u32,
+}
+
+pub const LIGHT: UiPalette = UiPalette {
+    bar_bg: 0xf0f0f0,
+    border: 0xc8c8c8,
+    tab_inactive: 0xe2e2e2,
+    tab_hover: 0xebebeb,
+    tab_active: 0xffffff,
+    text: 0x1a1a1a,
+    text_dim: 0x505050,
+    hover_bg: 0xd6d6d6,
+    pressed_bg: 0xc0c0c0,
+    close_hover: 0xe81123,
+    header_bg: 0xe8e8e8,
+    drop_marker: 0x0b5cad,
+    grip: 0xa0a0a0,
+    icon_paper: 0xffffff,
+    icon_edge: 0x8a8a8a,
+    icon_line: 0x9a9a9a,
+};
+
+/// Windows 11 のダークモード (wx の既定はウィンドウ 0x191919・ボタン 0x333333) に合わせた暗い配色
+pub const DARK: UiPalette = UiPalette {
+    bar_bg: 0x202020,
+    border: 0x454545,
+    tab_inactive: 0x2b2b2b,
+    tab_hover: 0x353535,
+    tab_active: 0x1e1e1e,
+    text: 0xe6e6e6,
+    text_dim: 0xb0b0b0,
+    hover_bg: 0x404040,
+    pressed_bg: 0x505050,
+    close_hover: 0xc42b1c,
+    header_bg: 0x2b2b2b,
+    drop_marker: 0x4c9be8,
+    grip: 0x707070,
+    icon_paper: 0x3a3a3a,
+    icon_edge: 0x9a9a9a,
+    icon_line: 0x8a8a8a,
+};
+
+static UI_DARK: AtomicBool = AtomicBool::new(false);
+static EDITOR_DARK: AtomicBool = AtomicBool::new(false);
+static PREVIEW_DARK: AtomicBool = AtomicBool::new(false);
+
+/// 今の自前描画の配色 (ウィンドウの設定)
+pub fn ui() -> &'static UiPalette {
+    if ui_dark() {
+        &DARK
+    } else {
+        &LIGHT
+    }
+}
+
+/// ウィンドウ (wx の部品と自前描画) が暗いか
+pub fn ui_dark() -> bool {
+    UI_DARK.load(Ordering::Relaxed)
+}
+
+/// エディタが暗いか
+pub fn editor_dark() -> bool {
+    EDITOR_DARK.load(Ordering::Relaxed)
+}
+
+/// プレビューが暗いか
+pub fn preview_dark() -> bool {
+    PREVIEW_DARK.load(Ordering::Relaxed)
+}
+
+/// OS がアプリにダークモードを求めているか (Windows: 設定 → 個人用設定 → 色 → 「アプリ モード」)。
+/// ウィンドウの配色 (wx) とは別に見る: ウィンドウをライトにしていてもエディタは OS に従える
+#[cfg(windows)]
+pub fn system_dark() -> bool {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+    let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+    let key = wide("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize");
+    let value = wide("AppsUseLightTheme");
+    let mut data: u32 = 1;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    // SAFETY: 文字列は NUL 終端、data / size は DWORD 1 つ分の領域を指す
+    let rc = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            (&mut data as *mut u32).cast(),
+            &mut size,
+        )
+    };
+    rc == 0 && data == 0
+}
+
+/// GTK / macOS は wx の見た目がそのまま OS に従う
+#[cfg(not(windows))]
+pub fn system_dark() -> bool {
+    wxdragon::appearance::is_system_dark_mode()
+}
+
+fn resolve(theme: Theme) -> bool {
+    match theme {
+        Theme::System => system_dark(),
+        Theme::Light => false,
+        Theme::Dark => true,
+    }
+}
+
+/// 起動時に配色を決める。最初のウィンドウを作る前に呼ぶ (作った後でも効くが、ライトで描いてから
+/// 塗り直すのでちらつく)。起動後の変更は [`set_appearance`] + [`repaint_native`] + [`refresh`]
+pub fn init_ui(settings: &Settings) {
+    set_appearance(settings.general.theme);
+    refresh(settings);
+}
+
+/// ウィンドウ (wx の部品) の明暗を wx に指示する。失敗 (古い Windows) ならライトのまま。
+/// どちらで描いているかは [`refresh`] が wx に問い合わせる。
+///
+/// 起動後に呼んだ場合、wx (3.3.4 MSW) は最上位のウィンドウ 1 つにだけ WM_SYSCOLORCHANGE を送って
+/// 塗り直させる (タイトルバー・メニュー・各部品のテーマ)。ほかのウィンドウは [`repaint_native`] で知らせる
+pub fn set_appearance(theme: Theme) {
+    use wxdragon::appearance::{get_app, AppAppearance, Appearance};
+    let appearance = match theme {
+        Theme::System => Appearance::System,
+        Theme::Light => Appearance::Light,
+        Theme::Dark => Appearance::Dark,
+    };
+    if let Some(app) = get_app() {
+        let _ = app.set_appearance(appearance);
+    }
+}
+
+/// 開いているトップレベルウィンドウに WM_SYSCOLORCHANGE を送り、wx に明暗を当て直させる
+/// (wx は受け取ったウィンドウと子に MSWSetDarkOrLightMode をかけ、SysColourChanged を流す)
+#[cfg(windows)]
+pub fn repaint_native(frames: &[Frame]) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_SYSCOLORCHANGE};
+    for frame in frames {
+        let hwnd = frame.get_handle();
+        if !hwnd.is_null() {
+            // SAFETY: 生きているトップレベルウィンドウに、同じ UI スレッドから引数無しのメッセージを送る
+            unsafe { SendMessageW(hwnd as _, WM_SYSCOLORCHANGE, 0, 0) };
+        }
+    }
+}
+
+/// GTK / macOS は SetAppearance が既存のウィンドウにもすぐ効く
+#[cfg(not(windows))]
+pub fn repaint_native(_frames: &[Frame]) {}
+
+/// 何が変わったか ([`refresh`] の結果)
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Changed {
+    pub ui: bool,
+    pub editor: bool,
+    pub preview: bool,
+}
+
+/// 設定と OS の状態からエディタ・プレビューの明暗を決め直す (設定の変更時・OS の配色の変更時)。
+/// ウィンドウは wx が今どちらで描いているかを読み直すだけ (「システムに従う」なら OS に追従する)
+pub fn refresh(settings: &Settings) -> Changed {
+    // wx が実際に暗く描いているか (Windows: 「システムに従う」なら OS の今の設定、ダーク / ライトの
+    // 指定ならその通り)。自前描画もそれに合わせる
+    let ui = wxdragon::appearance::is_system_dark_mode();
+    let editor = resolve(settings.editor.theme);
+    let preview = resolve(settings.preview.theme);
+    Changed {
+        ui: UI_DARK.swap(ui, Ordering::Relaxed) != ui,
+        editor: EDITOR_DARK.swap(editor, Ordering::Relaxed) != editor,
+        preview: PREVIEW_DARK.swap(preview, Ordering::Relaxed) != preview,
+    }
+}
 
 /// ウィンドウの拡大率 (DPI / 96)。自前で描く部品の寸法・座標は DIP (拡大率 100% 換算) で書き、
 /// 描画・当たり判定・サイズ指定のたびにこれで実ピクセルに直す。
@@ -231,7 +418,7 @@ pub fn drag_cursor(
         dc.draw_polygon(&arrow, 0, 0, PolygonFillMode::OddEven);
         // アイコン (白い角丸の台座に乗せる)
         fill_round_rect(&dc, d(12), d(12), d(22), d(22), dip.pxf(4.0), 0xffffff);
-        dc.set_pen(rgb(BORDER), 1, PenStyle::Solid);
+        dc.set_pen(rgb(LIGHT.border), 1, PenStyle::Solid);
         dc.set_brush(rgb(0xffffff), BrushStyle::Transparent);
         dc.draw_rounded_rectangle(d(12), d(12), d(22), d(22), dip.pxf(4.0));
         icon(&dc, d(15), d(15), d(16));
@@ -247,7 +434,7 @@ pub fn drag_cursor(
                 dc.draw_line(cx, cy - d(3), cx, cy + d(4));
             }
             Badge::Insert => {
-                circle(&dc, cx, cy, r, DROP_MARKER);
+                circle(&dc, cx, cy, r, LIGHT.drop_marker);
                 dc.set_pen(rgb(0xffffff), stroke, PenStyle::Solid);
                 dc.draw_line(cx, cy - d(3), cx, cy + d(4));
                 dc.draw_line(cx - d(3), cy + d(1), cx, cy + d(4));

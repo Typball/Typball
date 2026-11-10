@@ -9,21 +9,21 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use wxdragon::id::{ID_CANCEL, ID_OK};
+use wxdragon::id::{ID_CANCEL, ID_HIGHEST, ID_OK};
 use wxdragon::prelude::*;
 
 use crate::filetype::FileType;
 use crate::i18n::{self, tr, tr_args};
 use crate::settings::{
     self, BottomWidth, Channel, ExternalChange, InstanceMode, LastTab, LineNumbers, MarkdownMode,
-    OpenMode, Panes, PanesOverride, SavedChanges, Settings, Wrap,
+    OpenMode, Panes, PanesOverride, SavedChanges, Settings, Theme, Wrap,
 };
 
 /// OK が押されたときに呼ばれる読み戻し処理の集まり
 type Readers = Vec<Box<dyn Fn(&mut Settings)>>;
 
 /// ページの中身を `panel` の中に作り、読み戻し処理を `readers` に登録する
-type PageBuilder = fn(&Panel, &Settings, &mut Readers);
+type PageBuilder = fn(&Panel, &Settings, &mut Readers, &Dialog);
 
 /// ページの並び: (タイトルのキー, 中身を作る関数, 直前の親ページの子か)。
 /// 子ページは Treebook で親の下にぶら下がる (ファイル → Markdown / Typst の雛形)
@@ -40,8 +40,18 @@ const PAGES: [(&str, PageBuilder, bool); 7] = [
 const LABEL_FLAGS: SizerFlag = SizerFlag::AlignCenterVertical;
 const GAP: i32 = 8;
 
+/// 「更新を今すぐ確認」で閉じたときの戻り値 (OK と同じく設定を読み戻す)
+const ID_CHECK_UPDATE: i32 = ID_HIGHEST + 400;
+
+/// OK で閉じたときの結果
+pub struct Outcome {
+    pub settings: Settings,
+    /// 「更新を今すぐ確認」で閉じた (設定を反映してから確認する)
+    pub check_update: bool,
+}
+
 /// ダイアログを開き、OK なら新しい設定を返す (キャンセルなら None)
-pub fn show(parent: &Frame, current: &Settings) -> Option<Settings> {
+pub fn show(parent: &Frame, current: &Settings) -> Option<Outcome> {
     let dialog = Dialog::builder(parent, &tr("settings.title"))
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .build();
@@ -66,6 +76,7 @@ pub fn show(parent: &Frame, current: &Settings) -> Option<Settings> {
         })
         .collect();
     let build_page = {
+        let dialog = dialog.clone();
         let current = current.clone();
         let readers = readers.clone();
         let built = RefCell::new(vec![false; PAGES.len()]);
@@ -76,7 +87,7 @@ pub fn show(parent: &Frame, current: &Settings) -> Option<Settings> {
             if std::mem::replace(&mut built.borrow_mut()[index], true) {
                 return;
             }
-            build(panel, &current, &mut readers.borrow_mut());
+            build(panel, &current, &mut readers.borrow_mut(), &dialog);
             panel.layout();
         })
     };
@@ -139,12 +150,15 @@ pub fn show(parent: &Frame, current: &Settings) -> Option<Settings> {
     dialog.layout();
 
     let result = dialog.show_modal();
-    let out = if result == ID_OK {
+    let out = if result == ID_OK || result == ID_CHECK_UPDATE {
         let mut s = current.clone();
         for read in readers.borrow().iter() {
             read(&mut s);
         }
-        Some(s)
+        Some(Outcome {
+            settings: s,
+            check_update: result == ID_CHECK_UPDATE,
+        })
     } else {
         None
     };
@@ -179,11 +193,42 @@ fn choice_with(parent: &Panel, items: Vec<String>) -> Choice {
     choice
 }
 
+/// 配色 (システムに従う / ライト / ダーク) の行をグリッドに足し、OK 時の読み戻しを登録する
+fn add_theme_row(
+    panel: &Panel,
+    grid: &FlexGridSizer,
+    label_key: &str,
+    current: Theme,
+    readers: &mut Readers,
+    store: fn(&mut Settings, Theme),
+) {
+    let choice = choice_with(
+        panel,
+        Theme::ALL.iter().map(|v| tr(theme_key(*v))).collect(),
+    );
+    let selected = Theme::ALL.iter().position(|v| *v == current).unwrap_or(0);
+    choice.set_selection(selected as u32);
+    grid.add(&label(panel, label_key), 0, LABEL_FLAGS, 0);
+    grid.add(&choice, 0, SizerFlag::AlignLeft, 0);
+    readers.push(Box::new(move |s| {
+        let idx = choice.get_selection().unwrap_or(0) as usize;
+        store(s, Theme::ALL.get(idx).copied().unwrap_or_default());
+    }));
+}
+
+fn theme_key(value: Theme) -> &'static str {
+    match value {
+        Theme::System => "settings.theme.system",
+        Theme::Light => "settings.theme.light",
+        Theme::Dark => "settings.theme.dark",
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 一般
 // ---------------------------------------------------------------------------
 
-fn page_general(panel: &Panel, current: &Settings, readers: &mut Readers) {
+fn page_general(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
     let px = |v: i32| panel.from_dip_int(v);
     let grid = form_grid(panel);
 
@@ -206,6 +251,16 @@ fn page_general(panel: &Panel, current: &Settings, readers: &mut Readers) {
         0,
     );
     grid.add(&choice, 0, SizerFlag::Expand, 0);
+
+    // ウィンドウ (メニュー・タブ・ダイアログ) の配色
+    add_theme_row(
+        panel,
+        &grid,
+        "settings.general.theme",
+        current.general.theme,
+        readers,
+        |s, v| s.general.theme = v,
+    );
 
     let note = StaticText::builder(panel)
         .with_label(&tr("settings.general.language_note"))
@@ -321,9 +376,17 @@ fn bottom_width_key(value: BottomWidth) -> &'static str {
 // エディタ
 // ---------------------------------------------------------------------------
 
-fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers) {
+fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
     let px = |v: i32| panel.from_dip_int(v);
     let grid = form_grid(panel);
+    add_theme_row(
+        panel,
+        &grid,
+        "settings.editor.theme",
+        current.editor.theme,
+        readers,
+        |s, v| s.editor.theme = v,
+    );
 
     // 同梱の UDEV Gothic (既定) を先頭に、続いて等幅フォント、残りを後に (どちらも名前順)。手入力もできる
     let embedded = crate::fonts::EDITOR_FONT_FAMILY;
@@ -517,7 +580,7 @@ fn saved_changes_key(value: SavedChanges) -> &'static str {
 // ファイル
 // ---------------------------------------------------------------------------
 
-fn page_files(panel: &Panel, current: &Settings, readers: &mut Readers) {
+fn page_files(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
     let px = |v: i32| panel.from_dip_int(v);
     let grid = form_grid(panel);
 
@@ -732,11 +795,11 @@ fn page_files(panel: &Panel, current: &Settings, readers: &mut Readers) {
 // ファイル → Markdown / Typst: 新しいファイルの雛形
 // ---------------------------------------------------------------------------
 
-fn page_template_md(panel: &Panel, current: &Settings, readers: &mut Readers) {
+fn page_template_md(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
     page_template(panel, current, readers, FileType::Md);
 }
 
-fn page_template_typ(panel: &Panel, current: &Settings, readers: &mut Readers) {
+fn page_template_typ(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
     page_template(panel, current, readers, FileType::Typ);
 }
 
@@ -787,9 +850,17 @@ fn page_template(panel: &Panel, current: &Settings, readers: &mut Readers, ft: F
 // プレビュー
 // ---------------------------------------------------------------------------
 
-fn page_preview(panel: &Panel, current: &Settings, readers: &mut Readers) {
+fn page_preview(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
     let px = |v: i32| panel.from_dip_int(v);
     let grid = form_grid(panel);
+    add_theme_row(
+        panel,
+        &grid,
+        "settings.preview.theme",
+        current.preview.theme,
+        readers,
+        |s, v| s.preview.theme = v,
+    );
 
     // プレビューのフォント (Typst の既定・Markdown の本文・プレビューウィンドウ)。同梱の Noto Sans JP を先頭に
     let embedded = typball_core::EMBEDDED_FONT_FAMILY;
@@ -931,7 +1002,7 @@ fn page_preview(panel: &Panel, current: &Settings, readers: &mut Readers) {
     }));
 }
 
-fn page_update(panel: &Panel, current: &Settings, readers: &mut Readers) {
+fn page_update(panel: &Panel, current: &Settings, readers: &mut Readers, dialog: &Dialog) {
     let px = |v: i32| panel.from_dip_int(v);
     let check = CheckBox::builder(panel)
         .with_label(&tr("settings.update.check_on_startup"))
@@ -966,6 +1037,16 @@ fn page_update(panel: &Panel, current: &Settings, readers: &mut Readers) {
         .build();
     note.wrap(px(520));
 
+    // 手動の確認。ダイアログを OK と同じく閉じて (チャネルの変更なども反映して) から確認する。
+    // 開いたまま確認すると、更新の適用 (全ウィンドウを閉じて再起動) が設定ダイアログと衝突する
+    let check_now = Button::builder(panel)
+        .with_label(&tr("settings.update.check_now"))
+        .build();
+    check_now.on_click({
+        let dialog = dialog.clone();
+        move |_| dialog.end_modal(ID_CHECK_UPDATE)
+    });
+
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
     sizer.add(&check, 0, SizerFlag::All, px(GAP));
     sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
@@ -975,6 +1056,7 @@ fn page_update(panel: &Panel, current: &Settings, readers: &mut Readers) {
         SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
         px(GAP),
     );
+    sizer.add(&check_now, 0, SizerFlag::All, px(GAP));
     panel.set_sizer(sizer, true);
 
     readers.push(Box::new(move |s| {

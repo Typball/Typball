@@ -55,7 +55,7 @@ use crate::i18n::{tr, tr_args};
 use crate::ime_win;
 use crate::outline::{self, OutlineItem};
 use crate::pane::{self, DropIndicator, FloatingPane, HeaderButton, PaneBox, Strip};
-use crate::preview::{paint_preview, render_preview, Preview, BG, SCROLL_UNIT};
+use crate::preview::{paint_preview, render_preview, Preview, SCROLL_UNIT};
 use crate::scintilla;
 use crate::settings::{self, BottomWidth, PanePosition, PaneSizes, Settings};
 use crate::tabbar::{TabBar, TabItem};
@@ -659,7 +659,7 @@ impl Tab {
             Pane::Preview => {
                 let win = ScrolledWindow::builder(&bbox.body).build();
                 win.set_scroll_rate(SCROLL_UNIT, SCROLL_UNIT);
-                win.set_background_color(Colour::new(BG.0, BG.1, BG.2, 255));
+                win.set_background_color(crate::preview::bg());
                 win.set_background_style(BackgroundStyle::Paint);
                 bbox.set_content(&win);
                 let state = Rc::new(RefCell::new(Preview {
@@ -1830,6 +1830,22 @@ impl Tab {
         self.refresh_decorations();
         self.update_title();
         self.update_status();
+    }
+
+    /// 配色の明暗が変わった (設定の変更・OS の切り替え)。エディタは色を当て直し、
+    /// プレビューは Typst を組み直して Markdown はページを読み直す
+    pub fn apply_theme(&self, changed: crate::theme::Changed, settings: &Settings) {
+        if changed.editor {
+            editor::apply_settings(&self.stc, settings);
+            self.refresh_decorations();
+            self.stc.refresh(true, None);
+        }
+        if changed.preview {
+            if let Some(web) = self.active_web_preview() {
+                web.reload_page();
+            }
+            self.request_render();
+        }
     }
 }
 
