@@ -990,7 +990,7 @@ fn handle_menu(win: &WindowRef, id: i32) {
                     return;
                 }
                 match action {
-                    Action::ExportPdf => export_pdf(win),
+                    Action::Export => export(win),
                     _ => tab.apply_action(action),
                 }
             }
@@ -1521,47 +1521,25 @@ fn drop_tab(win: &WindowRef, tab: &Tab, screen: Point) {
 // アクション
 // ---------------------------------------------------------------------------
 
-fn export_pdf(win: &WindowRef) {
+/// 書き出し画面を開く (Typst / Markdown)。書き出したらステータスバーに出す
+fn export(win: &WindowRef) {
     let Some(tab) = win.borrow().current_tab() else {
         return;
     };
-    if tab.filetype() != FileType::Typ {
-        return;
-    }
     let frame = win.borrow().frame;
-    let (name, dir) = {
+    let text = tab.text();
+    let (path, title) = {
         let doc = tab.doc.borrow();
-        let stem = Path::new(&doc.title())
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "document".to_string());
-        let dir = doc
-            .path
-            .as_ref()
-            .and_then(|p| p.parent())
-            .map(|d| d.display().to_string());
-        (format!("{stem}.pdf"), dir)
+        (doc.path.clone(), doc.title())
     };
-    let mut builder = FileDialog::builder(&frame)
-        .with_message(&tr("dialog.export_pdf_title"))
-        .with_default_file(&name)
-        .with_wildcard("*.pdf|*.pdf")
-        .with_style(FileDialogStyle::Save | FileDialogStyle::OverwritePrompt);
-    if let Some(dir) = dir {
-        builder = builder.with_default_dir(&dir);
-    }
-    let dialog = builder.build();
-    if dialog.show_modal() != ID_OK {
-        return;
-    }
-    let Some(path) = dialog.get_path() else {
-        return;
+    let source = crate::export_dialog::Source {
+        filetype: tab.filetype(),
+        text: &text,
+        path: path.as_deref(),
+        title: &title,
     };
-    let result = typball_core::export_pdf(&tab.text())
-        .and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string()));
-    match result {
-        Ok(()) => status(&frame, &tr_args("status.exported_pdf", &[("path", &path)])),
-        Err(e) => error_dialog(&frame, &tr_args("dialog.export_error", &[("error", &e)])),
+    if let Some(message) = crate::export_dialog::show(&frame, &source) {
+        status(&frame, &message);
     }
 }
 

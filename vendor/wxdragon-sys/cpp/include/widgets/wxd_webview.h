@@ -134,6 +134,20 @@ WXD_EXPORTED int wxd_WebViewEvent_GetTarget(const wxd_Event_t* event, char* buff
 // Static utility functions
 WXD_EXPORTED bool wxd_WebView_IsBackendAvailable(const char* backend);
 
+// Typball patch: run a script without waiting for its result. wxWebView::RunScript() waits in a
+// `while (...) wxYield();` loop, which never ends when the backend cannot deliver the result
+// (e.g. WebView2 while a page is loading and a menu is open), freezing the application.
+WXD_EXPORTED void wxd_WebView_RunScriptAsync(wxd_WebView_t* self, const char* javascript);
+
+// Typball patch: save the current page as PDF (WebView2 PrintToPdf). `paper` is
+// 0 = A4, 1 = A3, 2 = A5, 3 = B5 (JIS), 4 = Letter, 5 = Legal. The callback runs on the GUI
+// thread when the file has been written (ok = true) or writing failed. Returns false when the
+// backend cannot print to PDF (the callback is then not called).
+typedef void (*wxd_WebView_PdfSavedCallback)(void* user_data, bool ok);
+WXD_EXPORTED bool wxd_WebView_PrintToPdf(wxd_WebView_t* self, const char* path, int paper,
+                                         bool landscape, wxd_WebView_PdfSavedCallback callback,
+                                         void* user_data);
+
 #ifdef __cplusplus
 }
 #endif

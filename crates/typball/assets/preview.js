@@ -118,6 +118,32 @@
     else post("file:" + href);
   });
 
+  // 選択の有無を Rust へ知らせる (編集メニューの「コピー」の有効 / 無効。メニューを開くたびに
+  // ページへ問い合わせると、wx の同期 RunScript が結果を待つループで固まることがある)
+  var hadSelection = false;
+  document.addEventListener("selectionchange", function () {
+    var has = !!(window.getSelection && String(window.getSelection()).length);
+    if (has !== hadSelection) {
+      hadSelection = has;
+      post("sel:" + (has ? 1 : 0));
+    }
+  });
+
+  // 編集メニューの「コピー」「すべて選択」(Rust から非同期に呼ばれる)。コピーは選択文字列を
+  // Rust に渡してクリップボードへ入れてもらう (スクリプトからの execCommand("copy") は不確実)
+  window.typball.copySelection = function () {
+    var text = window.getSelection ? String(window.getSelection()) : "";
+    if (text) post("copy:" + text);
+  };
+  window.typball.selectAll = function () {
+    var content = document.getElementById("content") || document.body;
+    var range = document.createRange();
+    range.selectNodeContents(content);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  };
+
   document.addEventListener("DOMContentLoaded", function () {
     var content = document.getElementById("content");
     if (content) renderMath(content);

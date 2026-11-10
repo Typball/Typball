@@ -145,3 +145,15 @@ kbd {
   border-radius: 4px;
   background: var(--bg-subtle);
 }
+
+/* 書き出した HTML (Typball の外で開く) は末尾の余白 (プレビューのスクロール同期用) を詰める */
+body.export .markdown-body { padding-bottom: 40px; }
+
+/* PDF への書き出し (WebView2 の印刷)。背景色 (コードブロックなど) も印刷し、余白は用紙の余白に任せる */
+@media print {
+  :root { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .markdown-body { max-width: none; padding: 0; }
+  pre { white-space: pre-wrap; word-wrap: break-word; overflow: visible; }
+  h1, h2, h3, h4, h5, h6 { break-after: avoid; }
+  pre, table, img, blockquote { break-inside: avoid; }
+}

@@ -14,8 +14,8 @@ pub const ID_ACTION_BASE: i32 = ID_HIGHEST + 100;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
-    /// Typst を PDF に書き出す
-    ExportPdf,
+    /// 書き出し画面を開く (Typst: PDF / PNG / SVG、Markdown: PDF / HTML。`export_dialog.rs`)
+    Export,
     Bold,
     Italic,
     Heading,
@@ -29,7 +29,7 @@ pub enum Action {
 impl Action {
     /// ID の割り当て順 (全アクション)
     pub const ALL: [Action; 9] = [
-        Self::ExportPdf,
+        Self::Export,
         Self::Bold,
         Self::Italic,
         Self::Heading,
@@ -44,8 +44,8 @@ impl Action {
     pub fn for_filetype(filetype: FileType) -> &'static [Action] {
         use Action::*;
         match filetype {
-            FileType::Typ => &[Bold, Italic, Heading, Code, Math, Link, List, ExportPdf],
-            FileType::Md => &[Bold, Italic, Heading, Code, Quote, Link, List],
+            FileType::Typ => &[Bold, Italic, Heading, Code, Math, Link, List, Export],
+            FileType::Md => &[Bold, Italic, Heading, Code, Quote, Link, List, Export],
             FileType::Txt => &[],
         }
     }
@@ -57,12 +57,12 @@ impl Action {
 
     /// 選択範囲への書式付けか (エディタのテキストを変える)
     pub fn is_format(self) -> bool {
-        !matches!(self, Self::ExportPdf)
+        !matches!(self, Self::Export)
     }
 
     /// メニュー項目の前に区切り線を入れるか
     pub fn separator_before(self) -> bool {
-        matches!(self, Self::ExportPdf)
+        matches!(self, Self::Export)
     }
 
     pub fn id(self) -> i32 {
@@ -76,7 +76,7 @@ impl Action {
 
     fn key(self) -> &'static str {
         match self {
-            Self::ExportPdf => "export_pdf",
+            Self::Export => "export",
             Self::Bold => "bold",
             Self::Italic => "italic",
             Self::Heading => "heading",
@@ -115,6 +115,7 @@ mod tests {
     #[test]
     fn txt_has_no_actions() {
         assert!(Action::for_filetype(FileType::Txt).is_empty());
-        assert!(Action::for_filetype(FileType::Typ).contains(&Action::ExportPdf));
+        assert!(Action::for_filetype(FileType::Typ).contains(&Action::Export));
+        assert!(Action::for_filetype(FileType::Md).contains(&Action::Export));
     }
 }

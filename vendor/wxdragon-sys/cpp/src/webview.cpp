@@ -12,6 +12,9 @@
 #include "wx/webview.h"
 #include "wx/mstream.h"
 #include "wx/filesys.h"
+// Typball patch: wxd_WebView_PrintToPdf
+#include "wx/cmndata.h"
+#include <memory>
 
 // Custom scheme handler that bridges wxWebViewHandler::GetFile to a Rust callback.
 // We override GetFile rather than StartRequest because the base StartRequest
@@ -721,6 +724,51 @@ wxd_WebViewEvent_GetTarget(const wxd_Event_t* event, char* buffer, size_t len)
     if (!webview_event)
         return -1;
     return (int)wxd_cpp_utils::copy_wxstring_to_buffer(webview_event->GetTarget(), buffer, len);
+}
+
+// Typball patch: see wxd_webview.h
+WXD_EXPORTED void
+wxd_WebView_RunScriptAsync(wxd_WebView_t* self, const char* javascript)
+{
+    wxWebView* webview = (wxWebView*)self;
+    if (!webview || !javascript)
+        return;
+    webview->RunScriptAsync(wxString::FromUTF8(javascript));
+}
+
+// Typball patch: see wxd_webview.h
+WXD_EXPORTED bool
+wxd_WebView_PrintToPdf(wxd_WebView_t* self, const char* path, int paper, bool landscape,
+                       wxd_WebView_PdfSavedCallback callback, void* user_data)
+{
+#if wxUSE_PRINTING_ARCHITECTURE
+    wxWebView* webview = (wxWebView*)self;
+    if (!webview || !path)
+        return false;
+    static const wxPaperSize papers[] = { wxPAPER_A4, wxPAPER_A3, wxPAPER_A5,
+                                          wxPAPER_B5_TRANSVERSE, wxPAPER_LETTER, wxPAPER_LEGAL };
+    wxPrintData data;
+    data.SetPaperId(paper >= 0 && paper < (int)WXSIZEOF(papers) ? papers[paper] : wxPAPER_A4);
+    data.SetOrientation(landscape ? wxLANDSCAPE : wxPORTRAIT);
+    const wxString file = wxString::FromUTF8(path);
+    if (callback)
+    {
+        // One handler per request; it ignores the results of other files and stays bound
+        // (a few per session) because a handler cannot unbind itself while running.
+        auto done = std::make_shared<bool>(false);
+        webview->Bind(wxEVT_WEBVIEW_PDF_SAVED, [file, callback, user_data, done](wxWebViewEvent& event) {
+            event.Skip();
+            if (*done || event.GetURL() != file)
+                return;
+            *done = true;
+            callback(user_data, event.GetInt() != 0);
+        });
+    }
+    return webview->PrintToPDF(file, data);
+#else
+    (void)self; (void)path; (void)paper; (void)landscape; (void)callback; (void)user_data;
+    return false;
+#endif
 }
 
 } // extern "C"

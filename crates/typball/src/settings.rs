@@ -33,6 +33,7 @@ pub struct Settings {
     pub update: Update,
     pub window: Window,
     pub instance: Instance,
+    pub export: Export,
 }
 
 /// 配色 (ウィンドウ・エディタ・プレビューで別々に選ぶ)
@@ -149,6 +150,9 @@ pub struct Preview {
     /// プレビューの配色。Typst は暗いとき明るさを反転して描き、Markdown は CSS を切り替える
     /// (サイトモードはサイト自身の CSS に任せる)
     pub theme: Theme,
+    /// Typst のプレビューの倍率: "fit_width" (幅に合わせる) / "fit_page" (ページ全体) / "125" (%)。
+    /// プレビューのツールバーで最後に選んだもの
+    pub typst_zoom: String,
 }
 
 impl Default for Preview {
@@ -161,6 +165,46 @@ impl Default for Preview {
             site_command: "hugo server -D -N -M --port {port} -s {root}".to_string(),
             site_url: "http://localhost:{port}/".to_string(),
             theme: Theme::System,
+            typst_zoom: "fit_width".to_string(),
+        }
+    }
+}
+
+/// 書き出し (アクション → 書き出し) で最後に選んだ形式と設定
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Export {
+    /// Typst の形式: "pdf" / "png" (1 ファイル) / "png_pages" (ページごと) / "svg" / "svg_pages"
+    pub typst_format: String,
+    /// Markdown の形式: "pdf" / "html"
+    pub markdown_format: String,
+    /// PDF のバージョン ("1.7" など) と PDF/A ("" = 無し、"a-2b" など)
+    pub pdf_version: String,
+    pub pdf_a: String,
+    pub pdf_ua: bool,
+    pub pdf_tagged: bool,
+    /// PNG の解像度 (dpi)
+    pub png_dpi: u32,
+    /// HTML に画像を埋め込む (data: URL)
+    pub html_embed_images: bool,
+    /// Markdown の PDF の用紙 ("A4" など) と向き
+    pub paper: String,
+    pub landscape: bool,
+}
+
+impl Default for Export {
+    fn default() -> Self {
+        Self {
+            typst_format: "pdf".to_string(),
+            markdown_format: "pdf".to_string(),
+            pdf_version: "1.7".to_string(),
+            pdf_a: String::new(),
+            pdf_ua: false,
+            pdf_tagged: true,
+            png_dpi: 144,
+            html_embed_images: true,
+            paper: "A4".to_string(),
+            landscape: false,
         }
     }
 }

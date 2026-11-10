@@ -21,20 +21,18 @@ use wxdragon::prelude::*;
 use crate::document::Document;
 use crate::filetype::FileType;
 use crate::i18n::{tr, tr_args};
-use crate::preview::{paint_preview, render_preview, Preview, SCROLL_UNIT};
+use crate::preview::TypstView;
 use crate::settings;
 use crate::webpreview::{self, WebPreview};
 use crate::window;
 
 /// 外部変更を確認する間隔 (ms)
 const EXTERNAL_CHECK_MS: i32 = 2000;
-/// サイズ変更後に組み直すまでの待ち時間 (ms)
-const RENDER_DELAY_MS: i32 = 20;
 /// wxSTB_SIZEGRIP | wxSTB_SHOW_TIPS | wxSTB_ELLIPSIZE_END | wxFULL_REPAINT_ON_RESIZE
 const STATUS_BAR_STYLE: i64 = 0x0010 | 0x0020 | 0x0100 | 0x0001_0000;
 
 enum Content {
-    Typst(Rc<RefCell<Preview>>),
+    Typst(Rc<TypstView>),
     Web(Rc<WebPreview>),
     Text(TextCtrl),
 }
@@ -46,8 +44,6 @@ pub struct Viewer {
     content: Content,
     /// 外部変更の監視
     _watch: Timer<Frame>,
-    /// サイズ変更後の組み直し (Typst)
-    render_timer: Timer<Frame>,
 }
 
 thread_local! {
@@ -125,18 +121,9 @@ impl Viewer {
         let body = Panel::builder(&frame).build();
         let content = match doc.filetype {
             FileType::Typ => {
-                let win = ScrolledWindow::builder(&body).build();
-                win.set_scroll_rate(SCROLL_UNIT, SCROLL_UNIT);
-                win.set_background_color(crate::preview::bg());
-                win.set_background_style(BackgroundStyle::Paint);
-                fill(&body, &win);
-                Content::Typst(Rc::new(RefCell::new(Preview {
-                    scrolled: win,
-                    bitmap: None,
-                    size: (0, 0),
-                    rendered_width: -1,
-                    frame,
-                })))
+                let view = TypstView::new(&body, frame);
+                fill(&body, &view.container);
+                Content::Typst(view)
             }
             FileType::Md => {
                 let web = WebPreview::new(&body, frame, doc.path.as_deref());
@@ -171,7 +158,6 @@ impl Viewer {
             text: RefCell::new(text),
             content,
             _watch: Timer::new(&frame),
-            render_timer: Timer::new(&frame),
         });
         VIEWERS.with(|v| v.borrow_mut().push(viewer.clone()));
         viewer.bind(&edit);
@@ -223,39 +209,9 @@ impl Viewer {
             }
         });
         self._watch.start(EXTERNAL_CHECK_MS, false);
-        self.render_timer.on_tick({
-            let weak = weak.clone();
-            move |_| {
-                if let Some(v) = weak.upgrade() {
-                    v.render();
-                }
-            }
-        });
         match &self.content {
-            Content::Typst(state) => {
-                let win = state.borrow().scrolled;
-                win.on_paint({
-                    let state = state.clone();
-                    move |_| paint_preview(&state)
-                });
-                win.on_erase_background(|_| {});
-                // 幅が変わると収まる解像度が変わるので組み直す
-                win.on_size({
-                    let weak = weak.clone();
-                    let state = state.clone();
-                    move |_| {
-                        let changed = state
-                            .try_borrow()
-                            .map(|st| st.rendered_width != win.get_client_size().width)
-                            .unwrap_or(false);
-                        if changed {
-                            if let Some(v) = weak.upgrade() {
-                                v.render_timer.start(RENDER_DELAY_MS, true);
-                            }
-                        }
-                    }
-                });
-            }
+            // 大きさの変化 (合わせるモードの並べ直し) は TypstView が自分で扱う
+            Content::Typst(_) => {}
             Content::Web(web) => {
                 // 外部リンクはブラウザで、相対パスの .md などは別のプレビューウィンドウで
                 let weak = weak.clone();
@@ -285,8 +241,8 @@ impl Viewer {
     fn render(&self) {
         let text = self.text.borrow().clone();
         match &self.content {
-            Content::Typst(state) => {
-                render_preview(&text, state);
+            Content::Typst(view) => {
+                view.render(&text);
             }
             Content::Web(web) => {
                 let path = self.doc.borrow().path.clone();
@@ -378,7 +334,10 @@ pub fn apply_theme(changed: crate::theme::Changed) {
     for viewer in viewers {
         if changed.preview {
             match &viewer.content {
-                Content::Typst(_) => viewer.render(),
+                Content::Typst(view) => {
+                    view.apply_theme();
+                    viewer.render();
+                }
                 Content::Web(web) => {
                     viewer.render();
                     web.reload_page();

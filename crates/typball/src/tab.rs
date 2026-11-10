@@ -55,7 +55,7 @@ use crate::i18n::{tr, tr_args};
 use crate::ime_win;
 use crate::outline::{self, OutlineItem};
 use crate::pane::{self, DropIndicator, FloatingPane, HeaderButton, PaneBox, Strip};
-use crate::preview::{paint_preview, render_preview, Preview, SCROLL_UNIT};
+use crate::preview::TypstView;
 use crate::scintilla;
 use crate::settings::{self, BottomWidth, PanePosition, PaneSizes, Settings};
 use crate::tabbar::{TabBar, TabItem};
@@ -175,7 +175,7 @@ impl Pane {
 enum PaneContent {
     Outline(ListBox),
     /// Typst: ページ画像
-    Preview(Rc<RefCell<Preview>>),
+    Preview(Rc<TypstView>),
     /// Markdown: WebView (HTML / サイトモード)
     Web(Rc<WebPreview>),
     /// コンソール: 読み取り専用のテキスト
@@ -508,7 +508,7 @@ impl Tab {
         if self.stc.has_focus() {
             return EditTarget::Editor(self.stc);
         }
-        if let Some(web) = self.active_web_preview().and_then(|w| w.webview()) {
+        if let Some(web) = self.active_web_preview().filter(|w| w.webview().is_some()) {
             // WebView2 の中にフォーカスがあるときは wx からは「どこにも無い」ように見えることが
             // あるので、エディタにフォーカスが無ければプレビューを相手にする
             return EditTarget::Web(web);
@@ -657,20 +657,9 @@ impl Tab {
                 PaneContent::Web(web)
             }
             Pane::Preview => {
-                let win = ScrolledWindow::builder(&bbox.body).build();
-                win.set_scroll_rate(SCROLL_UNIT, SCROLL_UNIT);
-                win.set_background_color(crate::preview::bg());
-                win.set_background_style(BackgroundStyle::Paint);
-                bbox.set_content(&win);
-                let state = Rc::new(RefCell::new(Preview {
-                    scrolled: win,
-                    bitmap: None,
-                    size: (0, 0),
-                    rendered_width: -1,
-                    frame: self.host.frame,
-                }));
-                self.bind_preview_window(state.clone());
-                PaneContent::Preview(state)
+                let view = TypstView::new(&bbox.body, self.host.frame);
+                bbox.set_content(&view.container);
+                PaneContent::Preview(view)
             }
         }
     }
@@ -771,29 +760,6 @@ impl Tab {
             list.set_selection(i as u32, true);
             list.ensure_visible(i as i32);
         }
-    }
-
-    /// プレビューの描画とサイズ変更時の再コンパイル
-    fn bind_preview_window(&self, state: Rc<RefCell<Preview>>) {
-        let win = state.borrow().scrolled;
-        win.on_paint({
-            let state = state.clone();
-            move |_| paint_preview(&state)
-        });
-        win.on_erase_background(|_| {});
-        // 幅が変わると収まる解像度が変わるので組み直す (高さだけの変化では何もしない)
-        win.on_size({
-            let tab = self.clone();
-            move |_| {
-                let changed = state
-                    .try_borrow()
-                    .map(|st| st.rendered_width != win.get_client_size().width)
-                    .unwrap_or(false);
-                if changed {
-                    tab.request_render();
-                }
-            }
-        });
     }
 
     /// 今表示に使っているペインの中身 (ドッキング側か浮動側)
@@ -940,7 +906,7 @@ impl Tab {
         let started = std::time::Instant::now();
         match self.active_content(Pane::Preview) {
             Some(PaneContent::Preview(preview)) => {
-                let report = render_preview(&text, &preview);
+                let report = preview.render(&text);
                 self.console_set(&typst_log(&report));
             }
             Some(PaneContent::Web(web)) => {
@@ -1841,8 +1807,10 @@ impl Tab {
             self.stc.refresh(true, None);
         }
         if changed.preview {
-            if let Some(web) = self.active_web_preview() {
-                web.reload_page();
+            match self.active_content(Pane::Preview) {
+                Some(PaneContent::Web(web)) => web.reload_page(),
+                Some(PaneContent::Preview(view)) => view.apply_theme(),
+                _ => {}
             }
             self.request_render();
         }

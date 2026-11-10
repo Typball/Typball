@@ -14,9 +14,11 @@
 //! あるコントロール (エディタ / 検索バーの入力欄 / プレビューの WebView) に合わせて振り分ける
 //! ([`EditTarget`])。振り分けないと検索欄で Ctrl+V を押してもエディタに貼り付いてしまう。
 
+use std::rc::Rc;
 use wxdragon::id::ID_HIGHEST;
 use wxdragon::prelude::*;
-use wxdragon::widgets::webview::WebView;
+
+use crate::webpreview::WebPreview;
 
 use crate::actions::Action;
 use crate::filetype::FileType;
@@ -44,8 +46,9 @@ pub enum EditTarget {
     Editor(StyledTextCtrl),
     /// 検索バーなどの 1 行入力欄
     Text(TextCtrl),
-    /// Markdown プレビューの WebView
-    Web(WebView),
+    /// Markdown プレビューの WebView。読み取り専用なので使えるのはコピーとすべて選択だけ。
+    /// WebView の CanCopy / Copy などは使わない (wx の同期 RunScript で固まることがある。webpreview.rs)
+    Web(Rc<WebPreview>),
 }
 
 impl EditItem {
@@ -111,13 +114,9 @@ impl EditItem {
                 }
             }
             EditTarget::Web(web) => match self {
-                Self::Undo => web.can_undo(),
-                Self::Redo => web.can_redo(),
-                Self::Cut => web.can_cut(),
-                Self::Copy => web.can_copy(),
-                Self::Paste => web.can_paste(),
-                Self::Delete => false,
+                Self::Copy => web.has_selection(),
                 Self::SelectAll => true,
+                _ => false,
             },
         }
     }
@@ -135,13 +134,9 @@ impl EditItem {
             },
             EditTarget::Text(text) => text_apply(text, self),
             EditTarget::Web(web) => match self {
-                Self::Undo => web.undo(),
-                Self::Redo => web.redo(),
-                Self::Cut => web.cut(),
                 Self::Copy => web.copy(),
-                Self::Paste => web.paste(),
-                Self::Delete => {}
                 Self::SelectAll => web.select_all(),
+                _ => {}
             },
         }
     }

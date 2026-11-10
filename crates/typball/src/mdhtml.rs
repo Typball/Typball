@@ -36,6 +36,16 @@ pub struct Context<'a> {
     pub version: u64,
     /// ダーク配色 (コードの色付けテーマを選ぶ)
     pub dark: bool,
+    /// 書き出し (HTML / PDF) 用に変換するときの画像 URL の扱い。None ならプレビュー用の仮想ホストの URL
+    pub export: Option<ExportUrls>,
+}
+
+/// 書き出したファイルの画像の参照のしかた
+pub struct ExportUrls {
+    /// 画像を data: URL として HTML に埋め込む (1 ファイルで完結する)
+    pub embed: bool,
+    /// 書き出し先のフォルダ。`.md` と同じフォルダなら相対パスをそのまま残す (違えば file: URL にする)
+    pub out_dir: Option<PathBuf>,
 }
 
 /// 変換結果
@@ -310,6 +320,9 @@ fn rewrite_url(dest: &str, ctx: &Context) -> String {
     if dest.is_empty() || dest.starts_with('#') {
         return dest.to_string();
     }
+    if let Some(export) = &ctx.export {
+        return export_url(dest, ctx, export);
+    }
     if let Some(scheme) = url_scheme(dest) {
         if scheme.eq_ignore_ascii_case("file") {
             let path = dest[scheme.len() + 1..].trim_start_matches("//");
@@ -350,6 +363,104 @@ fn rewrite_url(dest: &str, ctx: &Context) -> String {
     } else {
         format!("{normalized}?v={}", ctx.version)
     }
+}
+
+/// 書き出し用の画像 URL: 埋め込むなら data: URL、そうでなければ相対パスのまま (書き出し先が `.md` と
+/// 同じフォルダのとき) か file: URL。読めないファイルや Web の URL はそのまま残す
+fn export_url(dest: &str, ctx: &Context, export: &ExportUrls) -> String {
+    let normalized = dest.replace('\\', "/");
+    let path: Option<PathBuf> = match url_scheme(dest) {
+        Some(scheme) if scheme.eq_ignore_ascii_case("file") => {
+            let path = percent_decode(dest[scheme.len() + 1..].trim_start_matches("//"));
+            Some(PathBuf::from(match path.as_bytes() {
+                [b'/', d, b':', ..] if d.is_ascii_alphabetic() => path[1..].to_string(),
+                _ => path,
+            }))
+        }
+        Some(_) => None,
+        None if is_drive_path(&normalized) => {
+            Some(PathBuf::from(percent_decode(strip_query(&normalized))))
+        }
+        // ルート相対 (サイトの static/) は書き出し先では解決できないのでそのまま
+        None if normalized.starts_with('/') => None,
+        None => ctx
+            .base_dir
+            .map(|base| normalize_path(&base.join(percent_decode(strip_query(&normalized))))),
+    };
+    let Some(path) = path else {
+        return dest.to_string();
+    };
+    if export.embed {
+        if let Some(uri) = data_uri(&path) {
+            return uri;
+        }
+    }
+    let relative = url_scheme(dest).is_none() && !is_drive_path(&normalized);
+    let same_dir = match (&export.out_dir, ctx.base_dir) {
+        (Some(out), Some(base)) => normalize_path(out) == normalize_path(base),
+        _ => false,
+    };
+    if relative && same_dir {
+        return dest.to_string();
+    }
+    let text = path.to_string_lossy().replace('\\', "/");
+    format!(
+        "file:///{}",
+        percent_encode_path(text.trim_start_matches('/'))
+    )
+}
+
+/// 画像ファイルを data: URL にする (画像以外・大きすぎるファイル・読めないファイルは None)
+fn data_uri(path: &Path) -> Option<String> {
+    let mime = match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("svg") => "image/svg+xml",
+        Some("webp") => "image/webp",
+        Some("bmp") => "image/bmp",
+        Some("ico") => "image/x-icon",
+        Some("avif") => "image/avif",
+        _ => return None,
+    };
+    const MAX: u64 = 32 * 1024 * 1024;
+    if std::fs::metadata(path).ok()?.len() > MAX {
+        return None;
+    }
+    let data = std::fs::read(path).ok()?;
+    Some(format!("data:{mime};base64,{}", base64(&data)))
+}
+
+/// Base64 (標準のアルファベット、パディング付き)
+pub fn base64(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 /// 絶対パスのファイルを指す URL (`/<id>/~abs/C:/dir/a.png`)
@@ -542,7 +653,41 @@ mod tests {
             base_dir: base,
             version: 3,
             dark: false,
+            export: None,
         }
+    }
+
+    #[test]
+    fn base64_matches_rfc4648() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn export_urls_keep_relative_paths_next_to_the_document() {
+        let base = Path::new("C:/docs");
+        let mut c = ctx(Some(base));
+        c.export = Some(ExportUrls {
+            embed: false,
+            out_dir: Some(PathBuf::from("C:/docs")),
+        });
+        assert_eq!(rewrite_url("img/a.png", &c), "img/a.png");
+        assert_eq!(
+            rewrite_url("https://example.com/a.png", &c),
+            "https://example.com/a.png"
+        );
+        c.export = Some(ExportUrls {
+            embed: false,
+            out_dir: Some(PathBuf::from("D:/out")),
+        });
+        assert_eq!(
+            rewrite_url("img/a b.png", &c),
+            "file:///C:/docs/img/a%20b.png"
+        );
+        assert_eq!(rewrite_url("../x.png", &c), "file:///C:/x.png");
     }
 
     #[test]

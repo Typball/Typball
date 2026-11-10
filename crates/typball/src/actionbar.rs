@@ -246,19 +246,20 @@ fn paint_glyph(dc: &dyn DeviceContext, action: Action, cx: i32, cy: i32, dip: Di
                 dc.draw_line(cx - d(2), y, cx + d(8), y);
             }
         }
-        Action::ExportPdf => {
-            // 右上が折れた紙に "PDF"
+        Action::Export => {
+            // 右上が折れた紙と、右へ出ていく矢印
             dc.set_brush(rgb(theme::ui().icon_paper), BrushStyle::Solid);
-            dc.set_pen(rgb(0xc0392b), pen, PenStyle::Solid);
-            let pts = [(-7, -9), (3, -9), (7, -5), (7, 9), (-7, 9)]
+            dc.set_pen(rgb(theme::ui().icon_edge), pen, PenStyle::Solid);
+            let pts = [(-8, -9), (1, -9), (5, -5), (5, 9), (-8, 9)]
                 .map(|(x, y)| DcPoint::new(cx + d(x), cy + d(y)));
             dc.draw_polygon(&pts, 0, 0, PolygonFillMode::OddEven);
-            if let Some(font) = theme::ui_font(true, false, -4) {
-                dc.set_font(&font);
-            }
-            dc.set_text_foreground(rgb(0xc0392b));
-            let (w, h) = dc.get_text_extent("PDF");
-            dc.draw_text("PDF", cx - w / 2, cy + d(1) - h / 2);
+            let accent = 0xc0392b;
+            dc.set_pen(rgb(accent), (pen * 2).max(2), PenStyle::Solid);
+            dc.draw_line(cx - d(3), cy + d(2), cx + d(6), cy + d(2));
+            dc.set_pen(rgb(accent), pen, PenStyle::Solid);
+            dc.set_brush(rgb(accent), BrushStyle::Solid);
+            let head = [(5, -2), (9, 2), (5, 6)].map(|(x, y)| DcPoint::new(cx + d(x), cy + d(y)));
+            dc.draw_polygon(&head, 0, 0, PolygonFillMode::OddEven);
         }
     }
 }
@@ -290,7 +291,7 @@ pub fn apply_format(stc: &StyledTextCtrl, action: Action, filetype: FileType) {
         Action::Heading => heading(stc, if md { '#' } else { '=' }),
         Action::List => toggle_prefix(stc, "- "),
         Action::Quote => toggle_prefix(stc, "> "),
-        Action::ExportPdf => return,
+        Action::Export => return,
     }
     stc.set_focus();
 }

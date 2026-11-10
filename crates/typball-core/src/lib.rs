@@ -250,29 +250,31 @@ fn compile_document(source: &str) -> (Option<PagedDocument>, Vec<String>) {
 fn rasterize(doc: &PagedDocument, pixels_per_pt: f32) -> Vec<PageImage> {
     doc.pages()
         .iter()
-        .map(|page| {
-            let opts = typst_render::RenderOptions {
-                pixel_per_pt: typst::utils::Scalar::new(pixels_per_pt as f64),
-                ..Default::default()
-            };
-            let pixmap = typst_render::render(page, &opts);
-            let mut rgba = pixmap.data().to_vec();
-            // premultiplied -> straight alpha
-            for px in rgba.chunks_exact_mut(4) {
-                let a = px[3] as u32;
-                if a != 0 && a != 255 {
-                    for c in &mut px[..3] {
-                        *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
-                    }
-                }
-            }
-            PageImage {
-                width: pixmap.width(),
-                height: pixmap.height(),
-                rgba,
-            }
-        })
+        .map(|page| rasterize_page(page, pixels_per_pt))
         .collect()
+}
+
+fn rasterize_page(page: &typst_layout::Page, pixels_per_pt: f32) -> PageImage {
+    let opts = typst_render::RenderOptions {
+        pixel_per_pt: typst::utils::Scalar::new(pixels_per_pt as f64),
+        ..Default::default()
+    };
+    let pixmap = typst_render::render(page, &opts);
+    let mut rgba = pixmap.data().to_vec();
+    // premultiplied -> straight alpha
+    for px in rgba.chunks_exact_mut(4) {
+        let a = px[3] as u32;
+        if a != 0 && a != 255 {
+            for c in &mut px[..3] {
+                *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
+            }
+        }
+    }
+    PageImage {
+        width: pixmap.width(),
+        height: pixmap.height(),
+        rgba,
+    }
 }
 
 /// ソースをコンパイルして各ページを `pixels_per_pt` の解像度でラスタライズする。
@@ -318,6 +320,210 @@ pub fn export_pdf(source: &str) -> Result<Vec<u8>, String> {
             .collect::<Vec<_>>()
             .join("\n")
     })
+}
+
+// ---------------------------------------------------------------------------
+// コンパイル済みの文書 (プレビューの拡大縮小・ページ送り、書き出し)
+// ---------------------------------------------------------------------------
+
+/// コンパイル済みの文書。拡大率を変えたときはコンパイルし直さずにラスタライズだけやり直す
+pub struct Document {
+    doc: PagedDocument,
+}
+
+/// PDF の書き出し設定
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PdfSettings {
+    /// PDF のバージョン ("1.4" / "1.5" / "1.6" / "1.7" / "2.0")。空なら Typst の既定 (1.7)
+    pub version: String,
+    /// PDF/A ("a-1b" / "a-2u" / "a-4f" など)。空なら無し
+    pub pdfa: String,
+    /// PDF/UA-1 に準拠させる
+    pub pdfua: bool,
+    /// タグ付き PDF (アクセシビリティ用の構造) を書く
+    pub tagged: bool,
+}
+
+impl Default for PdfSettings {
+    fn default() -> Self {
+        Self {
+            version: "1.7".to_string(),
+            pdfa: String::new(),
+            pdfua: false,
+            tagged: true,
+        }
+    }
+}
+
+/// 選べる PDF のバージョン
+pub const PDF_VERSIONS: &[&str] = &["1.4", "1.5", "1.6", "1.7", "2.0"];
+/// 選べる PDF/A (空 = 無し)
+pub const PDF_A_STANDARDS: &[&str] = &[
+    "", "a-1b", "a-1a", "a-2b", "a-2u", "a-2a", "a-3b", "a-3u", "a-3a", "a-4", "a-4f", "a-4e",
+];
+
+/// PDF/A が求める PDF のバージョン (PDF/A を選んだときにバージョンを合わせるため)
+pub fn pdfa_version(pdfa: &str) -> Option<&'static str> {
+    match pdfa.get(..3)? {
+        "a-1" => Some("1.4"),
+        "a-2" | "a-3" => Some("1.7"),
+        "a-4" => Some("2.0"),
+        _ => None,
+    }
+}
+
+fn pdf_standard(name: &str) -> Option<typst_pdf::PdfStandard> {
+    use typst_pdf::PdfStandard as S;
+    Some(match name {
+        "1.4" => S::V_1_4,
+        "1.5" => S::V_1_5,
+        "1.6" => S::V_1_6,
+        "1.7" => S::V_1_7,
+        "2.0" => S::V_2_0,
+        "a-1b" => S::A_1b,
+        "a-1a" => S::A_1a,
+        "a-2b" => S::A_2b,
+        "a-2u" => S::A_2u,
+        "a-2a" => S::A_2a,
+        "a-3b" => S::A_3b,
+        "a-3u" => S::A_3u,
+        "a-3a" => S::A_3a,
+        "a-4" => S::A_4,
+        "a-4f" => S::A_4f,
+        "a-4e" => S::A_4e,
+        "ua-1" => S::Ua_1,
+        _ => return None,
+    })
+}
+
+/// ソースをコンパイルする。失敗したら文書は None (診断メッセージは両方で返る)
+pub fn compile_doc(source: &str) -> (Option<Document>, Vec<String>) {
+    let (doc, diagnostics) = compile_document(source);
+    (doc.map(|doc| Document { doc }), diagnostics)
+}
+
+/// 1 pt あたりのピクセル数 (dpi / 72)
+pub fn ppp_for_dpi(dpi: f32) -> f32 {
+    dpi / 72.0
+}
+
+impl Document {
+    pub fn page_count(&self) -> usize {
+        self.doc.pages().len()
+    }
+
+    /// 各ページの大きさ (pt、塗り足しを含む)
+    pub fn page_sizes_pt(&self) -> Vec<(f64, f64)> {
+        self.doc
+            .pages()
+            .iter()
+            .map(|p| {
+                (
+                    (p.frame.width() + p.bleed.left + p.bleed.right).to_pt(),
+                    (p.frame.height() + p.bleed.top + p.bleed.bottom).to_pt(),
+                )
+            })
+            .collect()
+    }
+
+    /// 各ページを `pixels_per_pt` の解像度でラスタライズする
+    pub fn rasterize(&self, pixels_per_pt: f32) -> Vec<PageImage> {
+        rasterize(&self.doc, pixels_per_pt)
+    }
+
+    /// 1 ページだけラスタライズする (`index` は 0 始まり)
+    pub fn rasterize_page(&self, index: usize, pixels_per_pt: f32) -> Option<PageImage> {
+        self.doc
+            .pages()
+            .get(index)
+            .map(|page| rasterize_page(page, pixels_per_pt))
+    }
+
+    /// PDF にする
+    pub fn pdf(&self, settings: &PdfSettings) -> Result<Vec<u8>, String> {
+        let mut list = Vec::new();
+        for name in [settings.version.as_str(), settings.pdfa.as_str()] {
+            if !name.is_empty() {
+                list.push(
+                    pdf_standard(name).ok_or_else(|| format!("unknown PDF standard: {name}"))?,
+                );
+            }
+        }
+        if settings.pdfua {
+            list.extend(pdf_standard("ua-1"));
+        }
+        let standards = typst_pdf::PdfStandards::new(&list).map_err(|e| {
+            let mut msg = e.message().to_string();
+            for hint in e.hints() {
+                msg.push_str(&format!("\nhint: {hint}"));
+            }
+            msg
+        })?;
+        let options = typst_pdf::PdfOptions {
+            standards,
+            tagged: settings.tagged || settings.pdfua,
+            ..Default::default()
+        };
+        let world = engine().session();
+        typst_pdf::pdf(&self.doc, &options).map_err(|errs| {
+            errs.iter()
+                .map(|d| format_diag(&world, d, "error"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+    }
+
+    /// 各ページの PNG (`dpi` の解像度)
+    pub fn png_pages(&self, dpi: f32) -> Result<Vec<Vec<u8>>, String> {
+        let opts = render_options(dpi);
+        self.doc
+            .pages()
+            .iter()
+            .map(|page| {
+                typst_render::render(page, &opts)
+                    .encode_png()
+                    .map_err(|e| e.to_string())
+            })
+            .collect()
+    }
+
+    /// 全ページを縦に並べた 1 枚の PNG (ページ間に `gap_pt` のすき間、すき間は白)
+    pub fn png_merged(&self, dpi: f32, gap_pt: f64) -> Result<Vec<u8>, String> {
+        typst_render::render_merged(
+            &self.doc,
+            &render_options(dpi),
+            Abs::pt(gap_pt),
+            Some(typst::visualize::Color::WHITE),
+        )
+        .encode_png()
+        .map_err(|e| e.to_string())
+    }
+
+    /// 各ページの SVG
+    pub fn svg_pages(&self) -> Vec<String> {
+        let opts = typst_svg::SvgOptions::default();
+        self.doc
+            .pages()
+            .iter()
+            .map(|page| typst_svg::svg(page, &opts))
+            .collect()
+    }
+
+    /// 全ページを縦に並べた 1 枚の SVG
+    pub fn svg_merged(&self, gap_pt: f64) -> String {
+        typst_svg::svg_merged(
+            &self.doc,
+            &typst_svg::SvgOptions::default(),
+            Abs::pt(gap_pt),
+        )
+    }
+}
+
+fn render_options(dpi: f32) -> typst_render::RenderOptions {
+    typst_render::RenderOptions {
+        pixel_per_pt: typst::utils::Scalar::new(ppp_for_dpi(dpi.clamp(10.0, 2400.0)) as f64),
+        ..Default::default()
+    }
 }
 
 fn format_diag(world: &Session, d: &SourceDiagnostic, kind: &str) -> String {

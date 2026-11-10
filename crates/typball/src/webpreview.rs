@@ -7,15 +7,19 @@
 //! フォルダにある画像 (`/<文書番号>/<相対パス>`) をすべてここから返すので、一時ファイルも HTTP
 //! サーバーも要らず、相対パスの画像はブラウザがページの URL 基準で解決してくれる。
 //!
-//! 更新はページを読み直さず、`run_script` で本文 (`<article>`) だけ差し替える。スクロール位置が
-//! 残り、画像はブラウザのキャッシュが効く。wx の `RunScript` は結果を待つ間イベントを処理する
-//! (再入する) ので、実行中の再呼び出しは「後でもう一度」に畳む。
+//! 更新はページを読み直さず、スクリプトで本文 (`<article>`) だけ差し替える。スクロール位置が
+//! 残り、画像はブラウザのキャッシュが効く。スクリプトは [`run_script_async`] で結果を待たずに流す:
+//! wx の同期 `RunScript` (と、それを使う `CanCopy` / `Copy` などの編集系) は結果が来るまで
+//! `while (...) wxYield();` で回り続け、WebView2 が結果を返せない状況 (読み込み中のページに対して
+//! メニューを開いたときなど) ではアプリ全体が固まる。ページ側の状態 (選択の有無など) はページから
+//! メッセージで知らせてもらう。
 //!
 //! 文書の情報 (フォルダ・最新の本文) は番号をキーにしたプロセス全体の表 [`DOCS`] に置く。
 //! ハンドラのクロージャは WebView ごとに登録するが、どの文書の要求かは URL の番号で分かる。
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::ffi::{c_void, CString};
 use std::path::{Component, Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,6 +27,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use wxdragon::event::WebViewEvents;
+use wxdragon::ffi;
 use wxdragon::prelude::*;
 use wxdragon::widgets::webview::{WebView, WebViewBackend, WebViewHandlerResponse};
 
@@ -57,6 +62,8 @@ struct DocState {
     root_dirs: Vec<PathBuf>,
     body: String,
     title: String,
+    /// 書き出し (PDF) 用のページ: 常にライトの配色で、末尾の余白を詰める
+    export: bool,
 }
 
 fn docs() -> &'static Mutex<HashMap<u64, DocState>> {
@@ -83,9 +90,8 @@ pub struct WebPreview {
     bar: Option<ModeBar>,
     /// 殻ページが読み込まれて `typball.update` を受け付ける状態
     loaded: Cell<bool>,
-    /// `run_script` 実行中 (再入の抑止)
-    busy: Cell<bool>,
-    dirty: Cell<bool>,
+    /// ページで文字列が選択されているか (ページからの "sel:" メッセージで更新。編集メニュー用)
+    has_selection: Rc<Cell<bool>>,
     server: RefCell<Option<Rc<Server>>>,
     ready_timer: Timer<Panel>,
     ready_ticks: Cell<u32>,
@@ -202,8 +208,7 @@ impl WebPreview {
             project,
             bar,
             loaded: Cell::new(false),
-            busy: Cell::new(false),
-            dirty: Cell::new(false),
+            has_selection: Rc::new(Cell::new(false)),
             server: RefCell::new(None),
             ready_timer,
             ready_ticks: Cell::new(0),
@@ -222,6 +227,7 @@ impl WebPreview {
                     .unwrap_or_default(),
                 body: String::new(),
                 title: String::new(),
+                export: false,
             },
         );
         this.bind_events();
@@ -280,14 +286,42 @@ impl WebPreview {
         });
     }
 
-    /// ページ → Rust のメッセージ ("open:<url>", "file:<相対パス>", "line:<行>", "ready")
+    /// ページ → Rust のメッセージ ("open:<url>", "file:<相対パス>", "line:<行>", "ready")。
+    /// 選択の有無 ("sel:0/1") とコピー ("copy:<文字列>") はここで処理して `f` には渡さない
     pub fn on_message(&self, f: impl Fn(&str) + 'static) {
         if let Some(wv) = self.webview {
+            let has_selection = self.has_selection.clone();
             wv.on_script_message_received(move |event| {
-                if let Some(msg) = event.get_string() {
+                let Some(msg) = event.get_string() else {
+                    return;
+                };
+                if let Some(flag) = msg.strip_prefix("sel:") {
+                    has_selection.set(flag == "1");
+                } else if let Some(text) = msg.strip_prefix("copy:") {
+                    set_clipboard_text(text);
+                } else {
                     f(&msg);
                 }
             });
+        }
+    }
+
+    /// ページで文字列が選択されているか (編集メニューの「コピー」の有効 / 無効)
+    pub fn has_selection(&self) -> bool {
+        self.has_selection.get()
+    }
+
+    /// 選択範囲をクリップボードへ (ページが "copy:" で文字列を返してくる)
+    pub fn copy(&self) {
+        if let Some(wv) = self.webview {
+            run_script_async(&wv, "window.typball && typball.copySelection();");
+        }
+    }
+
+    /// 本文をすべて選択する
+    pub fn select_all(&self) {
+        if let Some(wv) = self.webview {
+            run_script_async(&wv, "window.typball && typball.selectAll();");
         }
     }
 
@@ -396,6 +430,7 @@ impl WebPreview {
             base_dir: base_dir.as_deref(),
             version: self.version.get(),
             dark: crate::theme::preview_dark(),
+            export: None,
         };
         let out = mdhtml::render(text, &ctx);
         {
@@ -411,31 +446,19 @@ impl WebPreview {
         }
     }
 
-    /// 最新の本文をページに流し込む。実行中に呼ばれたら終わってからもう一度流す
+    /// 最新の本文をページに流し込む (結果は待たない。スクリプトは送った順に実行される)
     fn flush(&self) {
         let Some(wv) = self.webview else {
             return;
         };
-        if self.busy.get() {
-            self.dirty.set(true);
-            return;
-        }
-        self.busy.set(true);
-        loop {
-            self.dirty.set(false);
-            let body = docs()
-                .lock()
-                .unwrap()
-                .get(&self.id)
-                .map(|d| d.body.clone())
-                .unwrap_or_default();
-            let json = serde_json::to_string(&body).unwrap_or_else(|_| "\"\"".to_string());
-            wv.run_script(&format!("window.typball && typball.update({json});"));
-            if !self.dirty.get() {
-                break;
-            }
-        }
-        self.busy.set(false);
+        let body = docs()
+            .lock()
+            .unwrap()
+            .get(&self.id)
+            .map(|d| d.body.clone())
+            .unwrap_or_default();
+        let json = serde_json::to_string(&body).unwrap_or_else(|_| "\"\"".to_string());
+        run_script_async(&wv, &format!("window.typball && typball.update({json});"));
     }
 
     /// 保存した: 画像のキャッシュを更新させる (呼び出し側が続けて set_markdown する)
@@ -449,7 +472,7 @@ impl WebPreview {
         let Some(wv) = self.webview else {
             return;
         };
-        if self.mode.get() != Mode::Markdown || !self.loaded.get() || self.busy.get() {
+        if self.mode.get() != Mode::Markdown || !self.loaded.get() {
             return;
         }
         if let Some(until) = self.sync_guard_until.get() {
@@ -462,14 +485,10 @@ impl WebPreview {
             return;
         }
         self.last_anchor.set(key);
-        self.busy.set(true);
-        wv.run_script(&format!(
-            "window.typball && typball.scrollToLine({line}, {anchor:.3});"
-        ));
-        self.busy.set(false);
-        if self.dirty.get() {
-            self.flush();
-        }
+        run_script_async(
+            &wv,
+            &format!("window.typball && typball.scrollToLine({line}, {anchor:.3});"),
+        );
     }
 
     /// プレビュー側のスクロールをエディタに反映した直後に呼ぶ (往復の揺れを止める)
@@ -502,6 +521,210 @@ pub fn open_external(url: &str) {
         std::process::Command::new("xdg-open").arg(url).spawn()
     };
     let _ = result;
+}
+
+/// スクリプトを実行し、結果は待たない。wx の `RunScript` (wxDragon の `run_script`) は使わないこと:
+/// 結果を `while (...) wxYield();` で待つので、WebView2 が結果を返せないと抜けられずに固まる
+pub fn run_script_async(wv: &WebView, js: &str) {
+    let ptr = wv.handle_ptr() as *mut ffi::wxd_WebView_t;
+    if ptr.is_null() {
+        return;
+    }
+    let Ok(script) = CString::new(js) else {
+        return;
+    };
+    unsafe { ffi::wxd_WebView_RunScriptAsync(ptr, script.as_ptr()) }
+}
+
+fn set_clipboard_text(text: &str) {
+    let clipboard = Clipboard::get();
+    if clipboard.open() {
+        clipboard.set_text(text);
+        clipboard.close();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 書き出し (HTML / PDF)
+// ---------------------------------------------------------------------------
+
+/// PDF の用紙 (wxd_WebView_PrintToPdf の番号と同じ順)
+pub const PAPERS: [&str; 6] = ["A4", "A3", "A5", "B5 (JIS)", "Letter", "Legal"];
+
+/// Markdown を 1 ファイルで完結する HTML にする (CSS は埋め込み、画像は `embed` なら data: URL)
+pub fn export_html(
+    markdown: &str,
+    md_path: Option<&Path>,
+    out: &Path,
+    embed_images: bool,
+) -> String {
+    let ctx = mdhtml::Context {
+        doc_id: 0,
+        base_dir: md_path.and_then(Path::parent),
+        version: 0,
+        dark: false,
+        export: Some(mdhtml::ExportUrls {
+            embed: embed_images,
+            out_dir: out.parent().map(Path::to_path_buf),
+        }),
+    };
+    let rendered = mdhtml::render(markdown, &ctx);
+    let title = rendered
+        .title
+        .or_else(|| {
+            md_path
+                .and_then(Path::file_stem)
+                .map(|s| s.to_string_lossy().into_owned())
+        })
+        .unwrap_or_default();
+    format!(
+        concat!(
+            "<!DOCTYPE html>\n<html data-theme=\"light\"><head><meta charset=\"utf-8\">\n",
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n",
+            "<title>{title}</title>\n<style>\n{css}\n{font_css}\n</style>\n</head>\n",
+            "<body class=\"export\"><article id=\"content\" class=\"markdown-body\">\n{body}\n</article></body></html>\n"
+        ),
+        title = mdhtml::escape_html(&title),
+        css = CSS,
+        font_css = body_font_css(&settings::get()),
+        body = rendered.body,
+    )
+}
+
+/// 書き出し中の PDF。PDF は WebView2 の印刷で作るので、見えない WebView に書き出し用のページ
+/// (ライトの配色) を読み込み、読み終わったら印刷する。WebView は `parent` (書き出しダイアログ) の
+/// 子なので、ダイアログを閉じれば一緒に消える
+pub struct PdfExport {
+    id: u64,
+}
+
+impl PdfExport {
+    /// 書き出しを始める。`done` は書けたら Ok、失敗したら Err (メッセージ) で 1 回だけ呼ばれる
+    pub fn start(
+        parent: &dyn WxWidget,
+        markdown: &str,
+        md_path: Option<&Path>,
+        out: &Path,
+        paper: usize,
+        landscape: bool,
+        done: impl FnOnce(Result<(), String>) + 'static,
+    ) -> Result<Rc<PdfExport>, String> {
+        if !available() {
+            return Err(tr("preview.webview_missing"));
+        }
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let base_dir = md_path.and_then(Path::parent);
+        let ctx = mdhtml::Context {
+            doc_id: id,
+            base_dir,
+            version: 1,
+            dark: false,
+            export: None,
+        };
+        let rendered = mdhtml::render(markdown, &ctx);
+        docs().lock().unwrap().insert(
+            id,
+            DocState {
+                base_dir: base_dir.map(Path::to_path_buf),
+                root_dirs: Vec::new(),
+                body: rendered.body,
+                title: rendered.title.unwrap_or_default(),
+                export: true,
+            },
+        );
+        let webview = WebView::builder(parent)
+            .with_backend(backend())
+            .with_size(Size::new(800, 600))
+            .build();
+        webview.register_handler(SCHEME, serve);
+        webview.enable_context_menu(false);
+        webview.show(false);
+        let job = Rc::new(PdfExport { id });
+        let out = out.display().to_string();
+        let done = Rc::new(RefCell::new(Some(done)));
+        let url = format!("https://{HOST}/{id}/index.html");
+        let started = Cell::new(false);
+        webview.on_loaded({
+            let url = url.clone();
+            move |event| {
+                if started.get() || !event.get_url().unwrap_or_default().starts_with(&url) {
+                    return;
+                }
+                started.set(true);
+                let finish = {
+                    let done = done.clone();
+                    move |result: Result<(), String>| {
+                        if let Some(f) = done.borrow_mut().take() {
+                            f(result);
+                        }
+                    }
+                };
+                let on_saved = {
+                    let finish = finish.clone();
+                    move |ok: bool| {
+                        finish(if ok {
+                            Ok(())
+                        } else {
+                            Err(tr("export.pdf_failed"))
+                        })
+                    }
+                };
+                if !print_to_pdf(&webview, &out, paper, landscape, on_saved) {
+                    finish(Err(tr("export.pdf_unsupported")));
+                }
+            }
+        });
+        webview.load_url(&url);
+        Ok(job)
+    }
+}
+
+impl Drop for PdfExport {
+    fn drop(&mut self) {
+        docs().lock().unwrap().remove(&self.id);
+    }
+}
+
+type PdfCallback = Box<dyn FnOnce(bool)>;
+
+extern "C" fn pdf_saved(user_data: *mut c_void, ok: bool) {
+    if user_data.is_null() {
+        return;
+    }
+    let f: Box<PdfCallback> = unsafe { Box::from_raw(user_data as *mut PdfCallback) };
+    f(ok);
+}
+
+/// 今のページを PDF に印刷する (WebView2)。印刷を始められなければ false (`f` は呼ばれない)
+fn print_to_pdf(
+    wv: &WebView,
+    path: &str,
+    paper: usize,
+    landscape: bool,
+    f: impl FnOnce(bool) + 'static,
+) -> bool {
+    let ptr = wv.handle_ptr() as *mut ffi::wxd_WebView_t;
+    let Ok(c_path) = CString::new(path) else {
+        return false;
+    };
+    if ptr.is_null() {
+        return false;
+    }
+    let user_data = Box::into_raw(Box::new(Box::new(f) as PdfCallback)) as *mut c_void;
+    let ok = unsafe {
+        ffi::wxd_WebView_PrintToPdf(
+            ptr,
+            c_path.as_ptr(),
+            paper as i32,
+            landscape,
+            Some(pdf_saved),
+            user_data,
+        )
+    };
+    if !ok {
+        drop(unsafe { Box::from_raw(user_data as *mut PdfCallback) });
+    }
+    ok
 }
 
 // ---------------------------------------------------------------------------
@@ -660,13 +883,14 @@ fn page_html(doc: &DocState) -> String {
             "<link rel=\"stylesheet\" href=\"/assets/preview.css\">",
             "<style>{font_css}</style>",
             "<script src=\"/assets/preview.js\"></script>",
-            "</head><body><article id=\"content\" class=\"markdown-body\">{body}</article></body></html>"
+            "</head><body{body_class}><article id=\"content\" class=\"markdown-body\">{body}</article></body></html>"
         ),
-        theme = if crate::theme::preview_dark() {
+        theme = if crate::theme::preview_dark() && !doc.export {
             "dark"
         } else {
             "light"
         },
+        body_class = if doc.export { " class=\"export\"" } else { "" },
         title = mdhtml::escape_html(&doc.title),
         font_css = font_css(&settings::get()),
         body = doc.body
@@ -676,15 +900,21 @@ fn page_html(doc: &DocState) -> String {
 /// 設定のプレビューフォントを本文に当てる CSS。同梱の Noto Sans JP は `/assets/` から @font-face で読む
 /// (インストールされていない機械でも同じ見た目になる)。後ろに preview.css と同じフォールバックを並べる
 fn font_css(settings: &settings::Settings) -> String {
-    let face = settings.preview.font_face.trim().replace(['"', '\\'], "");
-    let size = settings.preview.font_size.clamp(6, 72);
     let mut css = String::from(concat!(
         "@font-face{font-family:\"Noto Sans JP\";font-weight:400;",
         "src:url(/assets/NotoSansJP-Regular.otf) format(\"opentype\")}",
         "@font-face{font-family:\"Noto Sans JP\";font-weight:700;",
         "src:url(/assets/NotoSansJP-Bold.otf) format(\"opentype\")}",
     ));
-    css.push_str("body{font-family:");
+    css.push_str(&body_font_css(settings));
+    css
+}
+
+/// 本文のフォント指定 (@font-face 無し。書き出した HTML は見る側のフォントを使う)
+fn body_font_css(settings: &settings::Settings) -> String {
+    let face = settings.preview.font_face.trim().replace(['"', '\\'], "");
+    let size = settings.preview.font_size.clamp(6, 72);
+    let mut css = String::from("body{font-family:");
     if !face.is_empty() {
         css.push_str(&format!("\"{face}\","));
     }
@@ -706,6 +936,7 @@ mod tests {
             root_dirs: vec![base.join("static")],
             body: String::new(),
             title: String::new(),
+            export: false,
         }
     }
 
@@ -753,6 +984,7 @@ mod tests {
             root_dirs: vec![],
             body: "<p>hi</p>".into(),
             title: "T <1>".into(),
+            export: false,
         };
         let html = page_html(&d);
         assert!(html.contains("Content-Security-Policy"));
