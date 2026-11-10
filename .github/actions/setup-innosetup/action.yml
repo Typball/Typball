@@ -1,0 +1,49 @@
+# Windows ランナーに Inno Setup 7 を入れる composite action
+#
+# GitHub の windows ランナーに同梱されているのは Inno Setup 6 なので、ローカルと同じ 7 を
+# 公式の GitHub Releases (jrsoftware/issrc) から取得してサイレントインストールする。
+# ISCC.exe のフルパスを環境変数 ISCC に書き出す (呼び出し側は & $env:ISCC ...)
+name: Setup Inno Setup 7
+description: Install Inno Setup 7 from the official GitHub release and export the ISCC.exe path as $env:ISCC
+
+inputs:
+  version:
+    description: Inno Setup version (the release tag is is-<version with dots replaced by underscores>)
+    default: 7.1.1
+  sha256:
+    description: Expected SHA-256 of innosetup-<version>-x64.exe (empty to skip the check)
+    default: "8a5a6711c3766a6e5fb74f280ba0e3551e719ce94538d901fdbd1f8f9920b3f0"
+  install-dir:
+    description: Directory to install into
+    default: C:\innosetup7
+
+runs:
+  using: composite
+  steps:
+    - name: Download and install Inno Setup
+      shell: pwsh
+      run: |
+        $version = "${{ inputs.version }}"
+        $tag = "is-" + $version.Replace(".", "_")
+        $url = "https://github.com/jrsoftware/issrc/releases/download/$tag/innosetup-$version-x64.exe"
+        $exe = Join-Path $env:RUNNER_TEMP "innosetup-$version-x64.exe"
+        Write-Host "Downloading $url"
+        Invoke-WebRequest -Uri $url -OutFile $exe
+        $expected = "${{ inputs.sha256 }}"
+        if ($expected -ne "") {
+          $actual = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $expected.ToLower()) {
+            Write-Error "SHA-256 mismatch: expected $expected, got $actual"
+            exit 1
+          }
+          Write-Host "SHA-256 OK: $actual"
+        }
+        $dir = "${{ inputs.install-dir }}"
+        $p = Start-Process -FilePath $exe -Wait -PassThru -ArgumentList @(
+          "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/NOICONS", "/ALLUSERS", "/DIR=`"$dir`"")
+        if ($p.ExitCode -ne 0) { Write-Error "Inno Setup installer exited with $($p.ExitCode)"; exit 1 }
+        Remove-Item $exe
+        $iscc = Join-Path $dir "ISCC.exe"
+        if (-not (Test-Path $iscc)) { Write-Error "ISCC.exe not found in $dir"; exit 1 }
+        Add-Content $env:GITHUB_ENV "ISCC=$iscc"
+        Write-Host "ISCC $(& $iscc --version): $iscc"

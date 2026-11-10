@@ -1,7 +1,7 @@
-; Typball の Windows インストーラー (Inno Setup 6)
+; Typball の Windows インストーラー (Inno Setup 7)
 ;
-; ビルド (release.yml / ci.yml から呼ぶ。ISCC は GitHub の windows ランナーに同梱):
-;   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=0.1.0 installer\typball.iss
+; ビルド (release.yml / ci.yml から呼ぶ。CI では .github/actions/setup-innosetup が Inno Setup 7 を入れる):
+;   "C:\Program Files\Inno Setup 7\ISCC.exe" /DAppVersion=0.1.0 installer\typball.iss
 ; 出力: dist\typball-<AppVersion>-windows-x86_64-setup.exe
 ;
 ; 方針:
@@ -142,17 +142,19 @@ Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags
 Type: filesandordirs; Name: "{localappdata}\{#AppName}\EBWebView"
 
 [Code]
+// Pascal Script は関数内の const を受け付けない ('BEGIN' expected) ので、定数はグローバルに置く
+const
+  WebView2ClientKey = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+  WebView2ClientKey32 = 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+
 // WebView2 ランタイム (Evergreen) が入っているか。Typball の webview2_loader.rs と同じキーを見る
 function IsWebView2Installed: Boolean;
-const
-  ClientKey = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
-  ClientKey32 = 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
 var
   Version: String;
 begin
-  Result := (RegQueryStringValue(HKLM, ClientKey32, 'pv', Version) and (Version <> '') and (Version <> '0.0.0.0'))
-    or (RegQueryStringValue(HKLM, ClientKey, 'pv', Version) and (Version <> '') and (Version <> '0.0.0.0'))
-    or (RegQueryStringValue(HKCU, ClientKey, 'pv', Version) and (Version <> '') and (Version <> '0.0.0.0'));
+  Result := (RegQueryStringValue(HKLM, WebView2ClientKey32, 'pv', Version) and (Version <> '') and (Version <> '0.0.0.0'))
+    or (RegQueryStringValue(HKLM, WebView2ClientKey, 'pv', Version) and (Version <> '') and (Version <> '0.0.0.0'))
+    or (RegQueryStringValue(HKCU, WebView2ClientKey, 'pv', Version) and (Version <> '') and (Version <> '0.0.0.0'));
 end;
 
 // 無ければ Microsoft の Evergreen Bootstrapper (約 2 MB) を落として実行する (対話インストールのときだけ)

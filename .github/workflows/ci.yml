@@ -18,7 +18,7 @@ jobs:
     name: rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -37,12 +37,15 @@ jobs:
             os: ubuntu-22.04
           - name: macos-aarch64
             os: macos-latest
+          # Intel Mac 向け。GitHub の Intel (x64) macOS ランナーで組む (release.yml と同じ)
+          - name: macos-x86_64
+            os: macos-15-intel
     outputs:
       # nightly の表記と識別子 (全 OS で同じ値になる)
       label: ${{ steps.meta.outputs.label }}
       commit_time: ${{ steps.meta.outputs.commit_time }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # nightly の識別子はビルド元のコミット日時 (UNIX 秒) と短い SHA。番号は使わない (update.rs)。
       # build.rs がこれを埋め込み、アプリは nightly Release の本文の build-time と比べて新旧を判断する。
@@ -63,6 +66,12 @@ jobs:
           echo "commit_time=${commit_time}" >> "$GITHUB_OUTPUT"
           echo "app_version=${version}-nightly.${stamp}.${sha}" >> "$GITHUB_OUTPUT"
           echo "nightly ${human} UTC, ${sha} (${version}-nightly.${stamp}.${sha})"
+
+      # macOS の最低対応バージョンを Info.plist の LSMinimumSystemVersion (11.0) と揃える。
+      # Rust と cc / cmake (wxWidgets) の両方がこの値で -mmacosx-version-min を決める
+      - name: macOS deployment target
+        if: runner.os == 'macOS'
+        run: echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> "$GITHUB_ENV"
 
       - name: Install Linux dependencies (GTK3 など wxWidgets のビルドに必要)
         if: runner.os == 'Linux'
@@ -112,12 +121,17 @@ jobs:
           Compress-Archive -Path target/release/Typball.exe, README.md, LICENSE, THIRD-PARTY-NOTICES.txt `
             -DestinationPath "dist/typball-nightly-${{ matrix.name }}.zip"
 
-      # インストーラー (Inno Setup はランナーに同梱)。release より前にスクリプトの誤りに気づくためにも毎回組む
+      # インストーラーは Inno Setup 7 で組む (ランナー同梱は 6 なので、公式リリースから入れる)
+      - name: Install Inno Setup 7
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/setup-innosetup
+
+      # インストーラー。release より前にスクリプトの誤りに気づくためにも毎回組む
       - name: Package (Windows installer)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=${{ steps.meta.outputs.app_version }}" `
+          & $env:ISCC "/DAppVersion=${{ steps.meta.outputs.app_version }}" `
             "/DOutputName=typball-nightly-${{ matrix.name }}-setup" installer\typball.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem dist
@@ -154,7 +168,7 @@ jobs:
           cp README.md LICENSE THIRD-PARTY-NOTICES.txt stage/
           tar -C stage -czf "dist/typball-nightly-${{ matrix.name }}.tar.gz" .
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: typball-${{ matrix.name }}-${{ github.sha }}
           path: dist/*
@@ -173,8 +187,8 @@ jobs:
       group: nightly-release
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

@@ -26,7 +26,7 @@ runs:
   steps:
     - name: Restore WinLibs from cache
       id: cache
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ${{ inputs.install-dir }}
         key: winlibs-${{ runner.os }}-${{ inputs.tag }}-${{ inputs.archive }}
