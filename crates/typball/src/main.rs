@@ -62,6 +62,7 @@ mod site;
 mod tab;
 mod tabbar;
 mod theme;
+mod toolbar;
 mod update;
 mod update_dialog;
 mod viewer;

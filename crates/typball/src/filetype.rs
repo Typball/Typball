@@ -102,7 +102,7 @@ impl FileType {
             Self::Md => Panes {
                 show_outline: true,
                 show_preview: true,
-                show_console: false,
+                show_console: true,
                 show_actionbar: true,
                 sync_scroll_to_preview: true,
                 sync_scroll_to_editor: true,
@@ -110,7 +110,7 @@ impl FileType {
             Self::Typ => Panes {
                 show_outline: true,
                 show_preview: true,
-                show_console: false,
+                show_console: true,
                 show_actionbar: true,
                 sync_scroll_to_preview: true,
                 sync_scroll_to_editor: true,

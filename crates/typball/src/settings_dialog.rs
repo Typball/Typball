@@ -415,13 +415,26 @@ fn page_display(panel: &Panel, current: &Settings, readers: &mut Readers, _dialo
     );
     grid.add(&bottom_width, 0, SizerFlag::AlignLeft, 0);
 
+    // ツールバー (形式によらず全ウィンドウで共通)
+    let show_toolbar = CheckBox::builder(panel)
+        .with_label(&tr("settings.display.show_toolbar"))
+        .with_value(current.general.show_toolbar)
+        .build();
+
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
     sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
+    sizer.add(
+        &show_toolbar,
+        0,
+        SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
+        px(GAP),
+    );
     panel.set_sizer(sizer, true);
 
     readers.push(Box::new(move |s| {
         let idx = bottom_width.get_selection().unwrap_or(0) as usize;
         s.panes.bottom_width = BottomWidth::ALL.get(idx).copied().unwrap_or_default();
+        s.general.show_toolbar = show_toolbar.is_checked();
     }));
 }
 

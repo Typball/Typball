@@ -96,7 +96,8 @@ Typball が起動しているときにファイルをダブルクリックする
 ```toml
 [general]
 language = "system"   # "system" / "ja" / "en"
-last_tab = "keep_empty"     # 最後のタブを閉じたとき: "keep_empty" (空のタブを残す) / "close_window" (ウィンドウを閉じる。最後のウィンドウなら終了)
+last_tab = "close_window"   # 最後のタブを閉じたとき: "keep_empty" (空のタブを残す) / "close_window" (ウィンドウを閉じる。最後のウィンドウなら終了)
+show_toolbar = true         # メニューの下にツールバーを表示する (表示メニューの「ツールバー」と同じ)
 
 [editor]
 font_face = "UDEV Gothic"   # 既定は同梱の等幅フォント UDEV Gothic (未インストールでも使える)。エディタの中身だけに効く (ルーラー・行番号・コンソール・タブなどの UI は OS の既定 GUI フォント)
@@ -117,7 +118,7 @@ untitled_numbering = true   # 新規文書の名前に番号を付ける ("無�
 [filetypes.typ]             # 形式ごとに、開いたときに表示するペインとバー (書かない項目は形式の既定値)
 show_outline = true
 show_preview = true
-show_console = false        # コンソール (Typst の診断 / Markdown の変換結果 / 開発サーバーの出力)
+show_console = true         # コンソール (Typst の診断 / Markdown の変換結果 / 開発サーバーの出力)
 show_actionbar = true
 sync_scroll_to_preview = true   # エディタをスクロールしたらプレビューも追従 (Markdown のプレビューのみ対応)
 sync_scroll_to_editor = true    # プレビューをスクロールしたらエディタも追従 (エディタを動かしたくなければ false)
@@ -132,7 +133,7 @@ template = """           # 新しいファイル (Ctrl+N / 起動時の新規タ
 [filetypes.typ.pane_sizes]  # ペインの大きさ (px)。分割線を動かすと形式ごとに保存される (左右の置き場は幅、下は高さ)
 left = 200
 right = 460
-bottom = 260
+bottom = 110
 [filetypes.md]
 show_outline = true
 show_preview = true

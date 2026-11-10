@@ -30,6 +30,7 @@ use crate::settings_dialog;
 use crate::tab::{status_widths, Tab, TabHost, STATUS_FIELD_WIDTHS};
 use crate::tabbar::{DragTarget, TabBar};
 use crate::theme::{self, contains, inflate};
+use crate::toolbar::{ToolBar, ToolItem};
 use crate::update_dialog;
 
 /// wxID_PREFERENCES。macOS ではこの ID のメニュー項目がアプリメニューの「設定…」に移される。
@@ -66,6 +67,7 @@ const ID_REPLACE: i32 = ID_HIGHEST + 38;
 const ID_GOTO_LINE: i32 = ID_HIGHEST + 39;
 const ID_VIEW_CONSOLE: i32 = ID_HIGHEST + 40;
 const ID_OPEN_VIEWER: i32 = ID_HIGHEST + 41;
+const ID_VIEW_TOOLBAR: i32 = ID_HIGHEST + 42;
 // 編集項目は editmenu.rs (ID_HIGHEST + 60 ..)、アクションは actions.rs (+100 ..)
 
 /// 表示メニューの折り返しの並び (EmEditor と同じ順)
@@ -88,6 +90,8 @@ const DROP_MARGIN: i32 = 24;
 
 pub struct MainWindow {
     pub frame: Frame,
+    /// メニューバーの下のツールバー (設定 `[general] show_toolbar` で出し入れする)
+    toolbar: ToolBar,
     host: TabHost,
     /// タブバーと同じ並び
     tabs: Vec<Tab>,
@@ -278,15 +282,19 @@ fn build_window(position: Option<Point>) -> WindowRef {
     watch_system_theme(&frame);
 
     let panel = Panel::builder(&frame).build();
+    let toolbar = ToolBar::new(&panel);
+    toolbar.window().show(settings.general.show_toolbar);
     let tabbar = TabBar::new(&panel);
     let pages = Panel::builder(&panel).build();
     let root = BoxSizer::builder(Orientation::Vertical).build();
+    root.add(toolbar.window(), 0, SizerFlag::Expand, 0);
     root.add(tabbar.window(), 0, SizerFlag::Expand, 0);
     root.add(&pages, 1, SizerFlag::Expand, 0);
     panel.set_sizer(root, true);
 
     let win: WindowRef = Rc::new(RefCell::new(MainWindow {
         frame,
+        toolbar: toolbar.clone(),
         host: TabHost {
             pages,
             tabbar: tabbar.clone(),
@@ -358,6 +366,7 @@ fn build_window(position: Option<Point>) -> WindowRef {
         }
     });
     bind_tabbar(&win, &tabbar);
+    bind_toolbar(&win, &toolbar);
     frame.on_activate({
         let weak = weak.clone();
         move |event| {
@@ -492,6 +501,98 @@ fn bind_tabbar(win: &WindowRef, tabbar: &TabBar) {
             None => DragTarget::Nothing,
         }
     });
+}
+
+/// ツールバーのボタンをメニューと同じ処理につなぎ、有効 / 無効をアイドル時に合わせる
+fn bind_toolbar(win: &WindowRef, toolbar: &ToolBar) {
+    let weak = Rc::downgrade(win);
+    toolbar.on_click({
+        let weak = weak.clone();
+        move |item| {
+            if let Some(win) = weak.upgrade() {
+                handle_menu(&win, toolbar_id(item));
+            }
+        }
+    });
+    toolbar.on_dropdown({
+        let toolbar = toolbar.clone();
+        move |item, screen| {
+            if item != ToolItem::New {
+                return;
+            }
+            // 形式を選んで新規 (ファイルメニューの「形式を選んで新規」と同じ ID)。
+            // 選ばれた項目はツールバー → フレームへ伝わり frame.on_menu に届く
+            let mut menu = Menu::builder().build();
+            for (i, ft) in FileType::ALL.iter().enumerate() {
+                menu.append(
+                    ID_NEW_TYPE_BASE + i as i32,
+                    &tr(ft.name_key()),
+                    "",
+                    ItemKind::Normal,
+                );
+            }
+            toolbar.window().popup_menu(&mut menu, Some(screen));
+        }
+    });
+    // 編集の項目はフォーカス先や選択で変わるので、イベントを処理し終えるたびに合わせる
+    // (wxToolBar の UpdateUI と同じやり方)。変わったときだけ描き直す
+    let frame = win.borrow().frame;
+    frame.on_idle(move |_| {
+        let Some(win) = weak.upgrade() else {
+            return;
+        };
+        let Ok(w) = win.try_borrow() else {
+            return;
+        };
+        let tab = w.current_tab();
+        let target = tab.as_ref().map(|t| t.edit_target());
+        w.toolbar.set_enabled(|item| match item {
+            ToolItem::New | ToolItem::Open => true,
+            ToolItem::Save | ToolItem::Find | ToolItem::Replace => tab.is_some(),
+            _ => match (toolbar_edit_item(item), &target) {
+                (Some(edit), Some(target)) => edit.enabled(target),
+                _ => false,
+            },
+        });
+    });
+}
+
+/// ツールバーのボタンに対応するメニューの ID
+fn toolbar_id(item: ToolItem) -> i32 {
+    match item {
+        ToolItem::New => ID_NEW,
+        ToolItem::Open => ID_OPEN,
+        ToolItem::Save => ID_SAVE,
+        ToolItem::Find => ID_FIND,
+        ToolItem::Replace => ID_REPLACE,
+        _ => toolbar_edit_item(item).map(|e| e.id()).unwrap_or(0),
+    }
+}
+
+/// ツールバーの編集ボタンに対応する編集項目
+fn toolbar_edit_item(item: ToolItem) -> Option<EditItem> {
+    match item {
+        ToolItem::Undo => Some(EditItem::Undo),
+        ToolItem::Redo => Some(EditItem::Redo),
+        ToolItem::Cut => Some(EditItem::Cut),
+        ToolItem::Copy => Some(EditItem::Copy),
+        ToolItem::Paste => Some(EditItem::Paste),
+        _ => None,
+    }
+}
+
+/// 全ウィンドウのツールバーを設定に合わせて出し入れする
+fn apply_toolbar_visibility(show: bool) {
+    for win in all_windows() {
+        let w = win.borrow();
+        let bar = w.toolbar.window();
+        if bar.is_shown() != show {
+            bar.show(show);
+            if let Some(parent) = bar.get_parent() {
+                parent.layout();
+            }
+        }
+    }
 }
 
 /// 全ウィンドウの全タブのペインを設定の置き場に合わせて並べ直す
@@ -658,6 +759,13 @@ pub fn build_menu_bar(win: &WindowRef) {
     );
     view.append_separator();
     view.append(
+        ID_VIEW_TOOLBAR,
+        &tr("menu.view_toolbar"),
+        &tr("menu.help_text.view_toolbar"),
+        ItemKind::Check,
+    );
+    view.append_separator();
+    view.append(
         ID_VIEW_OUTLINE,
         &tr("menu.view_outline"),
         "",
@@ -777,6 +885,7 @@ fn update_dynamic_menus(win: &WindowRef) {
             view.check_item(ID_LINE_NUMBERS_BASE + i as i32, true);
         }
         view.check_item(ID_VIEW_RULER, s.editor.show_ruler);
+        view.check_item(ID_VIEW_TOOLBAR, s.general.show_toolbar);
         view.check_item(ID_VIEW_CHANGES, s.editor.highlight_changes);
         let can_clear = tab.is_some() && s.editor.highlight_changes;
         view.enable_item(ID_CLEAR_CHANGES, can_clear);
@@ -918,6 +1027,9 @@ fn handle_menu(win: &WindowRef, id: i32) {
             update_dynamic_menus(win);
         }
         ID_VIEW_RULER => change_settings(win, |s| s.editor.show_ruler = !s.editor.show_ruler),
+        ID_VIEW_TOOLBAR => {
+            change_settings(win, |s| s.general.show_toolbar = !s.general.show_toolbar)
+        }
         ID_VIEW_CHANGES => change_settings(win, |s| {
             s.editor.highlight_changes = !s.editor.highlight_changes
         }),
@@ -1692,6 +1804,9 @@ fn apply_settings(before: &Settings, after: &Settings) {
         theme::repaint_native(&frames);
     }
     let theme_changed = theme::refresh(after);
+    if after.general.show_toolbar != before.general.show_toolbar {
+        apply_toolbar_visibility(after.general.show_toolbar);
+    }
     let tabs_changed = after.editor != before.editor
         || after.filetypes != before.filetypes
         || after.files != before.files

@@ -283,6 +283,8 @@ pub struct General {
     pub last_tab: LastTab,
     /// ウィンドウ (メニュー・タブ・ペイン・ダイアログ) の配色
     pub theme: Theme,
+    /// メニューバーの下 (タブの上) にツールバーを表示する。形式によらず全ウィンドウで共通
+    pub show_toolbar: bool,
 }
 
 impl Default for General {
@@ -291,6 +293,7 @@ impl Default for General {
             language: crate::i18n::SYSTEM.to_string(),
             last_tab: LastTab::default(),
             theme: Theme::System,
+            show_toolbar: true,
         }
     }
 }
@@ -300,9 +303,9 @@ impl Default for General {
 #[serde(rename_all = "snake_case")]
 pub enum LastTab {
     /// 空のタブを 1 つ開いたままにする
-    #[default]
     KeepEmpty,
     /// ウィンドウを閉じる (最後のウィンドウなら Typball が終了する)
+    #[default]
     CloseWindow,
 }
 
@@ -488,7 +491,7 @@ impl Default for PaneSizes {
         Self {
             left: 200,
             right: 460,
-            bottom: 260,
+            bottom: 110,
         }
     }
 }
@@ -746,7 +749,7 @@ line_numbers = \"both\"
         )
         .unwrap();
         let md = crate::filetype::FileType::Md.pane_sizes(&s);
-        assert_eq!(md.as_array(), [240, 460, 260]);
+        assert_eq!(md.as_array(), [240, 460, 110]);
         assert_eq!(
             crate::filetype::FileType::Typ.pane_sizes(&s),
             PaneSizes::default()
