@@ -9,6 +9,7 @@ use wxdragon::widgets::scrolled_window::ScrollBarConfig;
 use crate::i18n::tr;
 
 const MAX_PPP: f32 = 1.5;
+/// ビットマップの周りの余白 (DIP)
 const MARGIN: i32 = 8;
 pub const SCROLL_UNIT: i32 = 16;
 pub const BG: (u8, u8, u8) = (230, 230, 230);
@@ -41,7 +42,8 @@ pub fn render_preview(source: &str, state: &Rc<RefCell<Preview>>) -> Report {
     };
     // レイアウト前はクライアント幅が 0 近辺なので最低幅を保証する
     let client_width = scrolled.get_client_size().width;
-    let avail = (client_width - MARGIN * 3).max(480) as u32;
+    let margin = scrolled.from_dip_int(MARGIN);
+    let avail = (client_width - margin * 3).max(480) as u32;
     let started = std::time::Instant::now();
     let out = typball_core::compile_fit(source, avail, MAX_PPP);
     let elapsed_ms = started.elapsed().as_millis();
@@ -63,8 +65,8 @@ pub fn render_preview(source: &str, state: &Rc<RefCell<Preview>>) -> Report {
         scrolled.set_scrollbars(ScrollBarConfig {
             pixels_per_unit_x: SCROLL_UNIT,
             pixels_per_unit_y: SCROLL_UNIT,
-            no_units_x: (new_size.0 + MARGIN * 2) / SCROLL_UNIT + 1,
-            no_units_y: (new_size.1 + MARGIN * 2) / SCROLL_UNIT + 1,
+            no_units_x: (new_size.0 + margin * 2) / SCROLL_UNIT + 1,
+            no_units_y: (new_size.1 + margin * 2) / SCROLL_UNIT + 1,
             x_pos: vx,
             y_pos: vy,
             no_refresh: true,
@@ -95,6 +97,7 @@ pub fn paint_preview(state: &Rc<RefCell<Preview>>) {
     if let Some(bmp) = st.bitmap.as_ref() {
         let (vx, vy) = st.scrolled.get_view_start();
         let (ux, uy) = st.scrolled.get_scroll_pixels_per_unit();
-        dc.draw_bitmap(bmp, MARGIN - vx * ux, MARGIN - vy * uy, false);
+        let margin = st.scrolled.from_dip_int(MARGIN);
+        dc.draw_bitmap(bmp, margin - vx * ux, margin - vy * uy, false);
     }
 }

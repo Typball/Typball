@@ -18,8 +18,9 @@ use crate::filetype::FileType;
 use crate::gutter::drawing_panel;
 use crate::i18n::tr;
 use crate::scintilla;
-use crate::theme::{self, contains, fill_round_rect, mouse_pos};
+use crate::theme::{self, contains, fill_round_rect, mouse_pos, Dip};
 
+// 寸法は DIP (拡大率 100% 換算)。使うときに `Dip::px` で実ピクセルに直す
 const BTN: i32 = 24;
 const GAP: i32 = 2;
 const PAD: i32 = 4;
@@ -39,7 +40,7 @@ pub struct ActionBar {
 
 impl ActionBar {
     pub fn new(parent: &Panel, filetype: FileType) -> ActionBar {
-        let panel = drawing_panel(parent, Size::new(-1, BTN + PAD));
+        let panel = drawing_panel(parent, Size::new(-1, parent.from_dip_int(BTN + PAD)));
         let bar = ActionBar {
             panel,
             state: Rc::new(RefCell::new(State {
@@ -70,13 +71,20 @@ impl ActionBar {
         self.panel.refresh(false, None);
     }
 
-    fn rect(index: usize) -> Rect {
-        Rect::new(PAD + index as i32 * (BTN + GAP), PAD / 2, BTN, BTN)
+    fn rect(index: usize, dip: Dip) -> Rect {
+        let d = |v: i32| dip.px(v);
+        Rect::new(
+            d(PAD + index as i32 * (BTN + GAP)),
+            d(PAD / 2),
+            d(BTN),
+            d(BTN),
+        )
     }
 
     fn hit_test(&self, p: Point) -> Option<usize> {
         let n = self.state.borrow().items.len();
-        (0..n).find(|i| contains(&Self::rect(*i), p))
+        let dip = Dip::of(&self.panel);
+        (0..n).find(|i| contains(&Self::rect(*i, dip), p))
     }
 
     fn bind(&self) {
@@ -152,6 +160,7 @@ impl ActionBar {
     fn paint(&self) {
         let dc = AutoBufferedPaintDC::new(&self.panel);
         let Size { width, height } = self.panel.get_client_size();
+        let dip = Dip::of(&self.panel);
         dc.set_background(rgb(theme::BAR_BG));
         dc.clear();
         dc.set_pen(rgb(theme::BORDER), 1, PenStyle::Solid);
@@ -159,7 +168,7 @@ impl ActionBar {
 
         let st = self.state.borrow();
         for (i, action) in st.items.iter().enumerate() {
-            let r = Self::rect(i);
+            let r = Self::rect(i, dip);
             let hot = st.hover == Some(i);
             let pressed = st.pressed == Some(i) && hot;
             if hot || pressed {
@@ -169,7 +178,7 @@ impl ActionBar {
                     r.y,
                     r.width,
                     r.height,
-                    4.0,
+                    dip.pxf(4.0),
                     if pressed {
                         theme::PRESSED_BG
                     } else {
@@ -177,7 +186,7 @@ impl ActionBar {
                     },
                 );
             }
-            paint_glyph(&dc, *action, r.x + r.width / 2, r.y + r.height / 2);
+            paint_glyph(&dc, *action, r.x + r.width / 2, r.y + r.height / 2, dip);
         }
     }
 }
@@ -190,8 +199,11 @@ fn bar_items(filetype: FileType) -> Vec<Action> {
         .collect()
 }
 
-/// ボタンの絵 (中心座標)
-fn paint_glyph(dc: &dyn DeviceContext, action: Action, cx: i32, cy: i32) {
+/// ボタンの絵 (中心座標)。座標は DIP で書き、`dip` で実ピクセルに直す。
+/// 文字の大きさは wx が描く先のウィンドウの DPI に合わせるので、ここでは換算しない
+fn paint_glyph(dc: &dyn DeviceContext, action: Action, cx: i32, cy: i32, dip: Dip) {
+    let d = |v: i32| dip.px(v);
+    let pen = dip.pen();
     let fg = theme::TEXT;
     let text = |s: &str, bold: bool, italic: bool, delta: i32| {
         if let Some(font) = theme::ui_font(bold, italic, delta) {
@@ -201,7 +213,7 @@ fn paint_glyph(dc: &dyn DeviceContext, action: Action, cx: i32, cy: i32) {
         let (w, h) = dc.get_text_extent(s);
         dc.draw_text(s, cx - w / 2, cy - h / 2);
     };
-    dc.set_pen(rgb(fg), 1, PenStyle::Solid);
+    dc.set_pen(rgb(fg), pen, PenStyle::Solid);
     dc.set_brush(rgb(fg), BrushStyle::Solid);
     match action {
         Action::Bold => text("B", true, false, 2),
@@ -212,45 +224,41 @@ fn paint_glyph(dc: &dyn DeviceContext, action: Action, cx: i32, cy: i32) {
         Action::Link => {
             // 鎖の輪 2 つ
             dc.set_brush(rgb(fg), BrushStyle::Transparent);
-            dc.draw_rounded_rectangle(cx - 9, cy - 3, 10, 7, 3.0);
-            dc.draw_rounded_rectangle(cx - 1, cy - 3, 10, 7, 3.0);
-            dc.set_pen(rgb(theme::BAR_BG), 2, PenStyle::Solid);
-            dc.draw_line(cx - 1, cy - 4, cx - 1, cy + 5);
-            dc.set_pen(rgb(fg), 1, PenStyle::Solid);
-            dc.draw_line(cx - 3, cy, cx + 3, cy);
+            let r = dip.pxf(3.0);
+            dc.draw_rounded_rectangle(cx - d(9), cy - d(3), d(10), d(7), r);
+            dc.draw_rounded_rectangle(cx - d(1), cy - d(3), d(10), d(7), r);
+            dc.set_pen(rgb(theme::BAR_BG), d(2), PenStyle::Solid);
+            dc.draw_line(cx - d(1), cy - d(4), cx - d(1), cy + d(5));
+            dc.set_pen(rgb(fg), pen, PenStyle::Solid);
+            dc.draw_line(cx - d(3), cy, cx + d(3), cy);
         }
         Action::List => {
             for i in 0..3 {
-                let y = cy - 6 + i * 6;
-                dc.draw_rectangle(cx - 8, y - 1, 3, 3);
-                dc.draw_line(cx - 3, y, cx + 8, y);
+                let y = cy + d(-6 + i * 6);
+                dc.draw_rectangle(cx - d(8), y - d(1), d(3), d(3));
+                dc.draw_line(cx - d(3), y, cx + d(8), y);
             }
         }
         Action::Quote => {
-            dc.draw_rectangle(cx - 8, cy - 7, 3, 14);
+            dc.draw_rectangle(cx - d(8), cy - d(7), d(3), d(14));
             for i in 0..3 {
-                let y = cy - 5 + i * 5;
-                dc.draw_line(cx - 2, y, cx + 8, y);
+                let y = cy + d(-5 + i * 5);
+                dc.draw_line(cx - d(2), y, cx + d(8), y);
             }
         }
         Action::ExportPdf => {
             // 右上が折れた紙に "PDF"
             dc.set_brush(rgb(0xffffff), BrushStyle::Solid);
-            dc.set_pen(rgb(0xc0392b), 1, PenStyle::Solid);
-            let pts = [
-                DcPoint::new(cx - 7, cy - 9),
-                DcPoint::new(cx + 3, cy - 9),
-                DcPoint::new(cx + 7, cy - 5),
-                DcPoint::new(cx + 7, cy + 9),
-                DcPoint::new(cx - 7, cy + 9),
-            ];
+            dc.set_pen(rgb(0xc0392b), pen, PenStyle::Solid);
+            let pts = [(-7, -9), (3, -9), (7, -5), (7, 9), (-7, 9)]
+                .map(|(x, y)| DcPoint::new(cx + d(x), cy + d(y)));
             dc.draw_polygon(&pts, 0, 0, PolygonFillMode::OddEven);
             if let Some(font) = theme::ui_font(true, false, -4) {
                 dc.set_font(&font);
             }
             dc.set_text_foreground(rgb(0xc0392b));
             let (w, h) = dc.get_text_extent("PDF");
-            dc.draw_text("PDF", cx - w / 2, cy + 1 - h / 2);
+            dc.draw_text("PDF", cx - w / 2, cy + d(1) - h / 2);
         }
     }
 }

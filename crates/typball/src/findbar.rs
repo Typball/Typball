@@ -21,8 +21,9 @@ use wxdragon::prelude::*;
 use crate::i18n::{tr, tr_args};
 use crate::scintilla;
 
+/// 部品の間隔 (DIP)
 const GAP: i32 = 4;
-/// 入力欄の幅
+/// 入力欄の幅 (DIP)
 const FIELD_WIDTH: i32 = 220;
 
 struct State {
@@ -49,9 +50,11 @@ pub struct FindBar {
 impl FindBar {
     pub fn new(parent: &Panel, stc: StyledTextCtrl) -> FindBar {
         let panel = Panel::builder(parent).build();
+        // 寸法は DIP で書き、置き先の画面の拡大率で実ピクセルにする (以後の拡大率の変化は wx が直す)
+        let px = |v: i32| parent.from_dip_int(v);
         let find = TextCtrl::builder(&panel)
             .with_style(TextCtrlStyle::ProcessEnter)
-            .with_size(Size::new(FIELD_WIDTH, -1))
+            .with_size(Size::new(px(FIELD_WIDTH), -1))
             .build();
         let prev = Button::builder(&panel).with_label(&tr("find.prev")).build();
         let next = Button::builder(&panel).with_label(&tr("find.next")).build();
@@ -67,7 +70,7 @@ impl FindBar {
         let status = StaticText::builder(&panel).build();
         let close = Button::builder(&panel)
             .with_label("×")
-            .with_size(Size::new(24, -1))
+            .with_size(Size::new(px(24), -1))
             .build();
         close.set_tooltip(&tr("find.close_tip"));
 
@@ -76,15 +79,20 @@ impl FindBar {
         let label = StaticText::builder(&panel)
             .with_label(&tr("find.label"))
             .build();
-        row1.add(&label, 0, center | SizerFlag::Left, GAP * 2);
-        row1.add(&find, 0, center | SizerFlag::Left, GAP);
-        row1.add(&prev, 0, center | SizerFlag::Left, GAP);
-        row1.add(&next, 0, center | SizerFlag::Left, GAP);
-        row1.add(&match_case, 0, center | SizerFlag::Left, GAP * 3);
-        row1.add(&whole_word, 0, center | SizerFlag::Left, GAP * 2);
-        row1.add(&regex, 0, center | SizerFlag::Left, GAP * 2);
-        row1.add(&status, 1, center | SizerFlag::Left, GAP * 3);
-        row1.add(&close, 0, center | SizerFlag::Left | SizerFlag::Right, GAP);
+        row1.add(&label, 0, center | SizerFlag::Left, px(GAP * 2));
+        row1.add(&find, 0, center | SizerFlag::Left, px(GAP));
+        row1.add(&prev, 0, center | SizerFlag::Left, px(GAP));
+        row1.add(&next, 0, center | SizerFlag::Left, px(GAP));
+        row1.add(&match_case, 0, center | SizerFlag::Left, px(GAP * 3));
+        row1.add(&whole_word, 0, center | SizerFlag::Left, px(GAP * 2));
+        row1.add(&regex, 0, center | SizerFlag::Left, px(GAP * 2));
+        row1.add(&status, 1, center | SizerFlag::Left, px(GAP * 3));
+        row1.add(
+            &close,
+            0,
+            center | SizerFlag::Left | SizerFlag::Right,
+            px(GAP),
+        );
 
         // 置換の段は別のパネルにまとめて、まとめて出し入れする
         let replace_row = Panel::builder(&panel).build();
@@ -93,7 +101,7 @@ impl FindBar {
             .build();
         let replace = TextCtrl::builder(&replace_row)
             .with_style(TextCtrlStyle::ProcessEnter)
-            .with_size(Size::new(FIELD_WIDTH, -1))
+            .with_size(Size::new(px(FIELD_WIDTH), -1))
             .build();
         let replace_one = Button::builder(&replace_row)
             .with_label(&tr("find.replace_one"))
@@ -102,10 +110,10 @@ impl FindBar {
             .with_label(&tr("find.replace_all"))
             .build();
         let row2 = BoxSizer::builder(Orientation::Horizontal).build();
-        row2.add(&replace_label, 0, center | SizerFlag::Left, GAP * 2);
-        row2.add(&replace, 0, center | SizerFlag::Left, GAP);
-        row2.add(&replace_one, 0, center | SizerFlag::Left, GAP);
-        row2.add(&replace_all, 0, center | SizerFlag::Left, GAP);
+        row2.add(&replace_label, 0, center | SizerFlag::Left, px(GAP * 2));
+        row2.add(&replace, 0, center | SizerFlag::Left, px(GAP));
+        row2.add(&replace_one, 0, center | SizerFlag::Left, px(GAP));
+        row2.add(&replace_all, 0, center | SizerFlag::Left, px(GAP));
         replace_row.set_sizer(row2, true);
         replace_row.show(false);
 
@@ -114,13 +122,13 @@ impl FindBar {
             &row1,
             0,
             SizerFlag::Expand | SizerFlag::Top | SizerFlag::Bottom,
-            GAP / 2,
+            px(GAP / 2),
         );
         col.add(
             &replace_row,
             0,
             SizerFlag::Expand | SizerFlag::Bottom,
-            GAP / 2,
+            px(GAP / 2),
         );
         panel.set_sizer(col, true);
         panel.show(false);

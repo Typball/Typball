@@ -182,6 +182,8 @@ fn show_release_dialog(frame: &Frame, release: &Release, can_install: bool) -> C
     let dialog = Dialog::builder(frame, &tr("update.title"))
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .build();
+    // 寸法は DIP で書き、ダイアログのある画面の拡大率で実ピクセルにする
+    let px = |v: i32| dialog.from_dip_int(v);
 
     // 開発版 (nightly) はその旨を見出しで断る
     let headline = StaticText::builder(&dialog)
@@ -197,7 +199,7 @@ fn show_release_dialog(frame: &Frame, release: &Release, can_install: bool) -> C
             ],
         ))
         .build();
-    headline.wrap(520);
+    headline.wrap(px(520));
     let title = StaticText::builder(&dialog)
         .with_label(&release.title)
         .build();
@@ -240,8 +242,8 @@ fn show_release_dialog(frame: &Frame, release: &Release, can_install: bool) -> C
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
     buttons.add(&link, 0, SizerFlag::AlignCenterVertical, 0);
     buttons.add_stretch_spacer(1);
-    buttons.add(&skip, 0, SizerFlag::Right, 8);
-    buttons.add(&later, 0, SizerFlag::Right, 8);
+    buttons.add(&skip, 0, SizerFlag::Right, px(8));
+    buttons.add(&later, 0, SizerFlag::Right, px(8));
     buttons.add(&install, 0, SizerFlag::Left, 0);
 
     let root = BoxSizer::builder(Orientation::Vertical).build();
@@ -249,24 +251,24 @@ fn show_release_dialog(frame: &Frame, release: &Release, can_install: bool) -> C
         &headline,
         0,
         SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-        12,
+        px(12),
     );
     root.add(
         &title,
         0,
         SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-        12,
+        px(12),
     );
-    root.add(&notes, 1, SizerFlag::Expand | SizerFlag::All, 12);
+    root.add(&notes, 1, SizerFlag::Expand | SizerFlag::All, px(12));
     root.add_sizer(
         &buttons,
         0,
         SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
-        12,
+        px(12),
     );
     dialog.set_sizer(root, true);
-    dialog.set_min_size(Size::new(480, 320));
-    dialog.set_size(Size::new(560, 420));
+    dialog.set_min_size(dialog.from_dip(Size::new(480, 320)));
+    dialog.set_size(dialog.from_dip(Size::new(560, 420)));
     dialog.centre();
     dialog.layout();
 

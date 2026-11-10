@@ -45,6 +45,8 @@ pub fn show(parent: &Frame, current: &Settings) -> Option<Settings> {
     let dialog = Dialog::builder(parent, &tr("settings.title"))
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .build();
+    // 寸法は DIP で書き、ダイアログのある画面の拡大率で実ピクセルにする
+    let px = |v: i32| dialog.from_dip_int(v);
 
     let book = Treebook::builder(&dialog).build();
     let readers: Rc<RefCell<Readers>> = Rc::new(RefCell::new(Vec::new()));
@@ -118,19 +120,19 @@ pub fn show(parent: &Frame, current: &Settings) -> Option<Settings> {
     buttons.realize();
 
     let root = BoxSizer::builder(Orientation::Vertical).build();
-    root.add(&book, 1, SizerFlag::Expand | SizerFlag::All, GAP);
+    root.add(&book, 1, SizerFlag::Expand | SizerFlag::All, px(GAP));
     root.add(
         &location,
         0,
         SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right,
-        GAP,
+        px(GAP),
     );
-    root.add_sizer(&buttons, 0, SizerFlag::Expand | SizerFlag::All, GAP);
+    root.add_sizer(&buttons, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
     dialog.set_sizer(root, true);
     // 長いパス (ポータブル運用など) はダイアログ幅で折り返す
-    location.wrap(640);
-    dialog.set_min_size(Size::new(640, 480));
-    dialog.set_size(Size::new(760, 520));
+    location.wrap(px(640));
+    dialog.set_min_size(dialog.from_dip(Size::new(640, 480)));
+    dialog.set_size(dialog.from_dip(Size::new(760, 520)));
     dialog.centre();
     // 見せる前に並べておく。wxMSW の wxDialog::Show は ::ShowWindow() の後に自分で WM_SIZE を
     // 送ってサイザーを動かすので、ここで並べておかないと部品が左上に固まった状態が先に見える
@@ -151,10 +153,11 @@ pub fn show(parent: &Frame, current: &Settings) -> Option<Settings> {
 }
 
 /// ラベル + ウィジェットの 2 列グリッドを作る
-fn form_grid() -> FlexGridSizer {
+fn form_grid(panel: &Panel) -> FlexGridSizer {
+    let px = |v: i32| panel.from_dip_int(v);
     let grid = FlexGridSizer::builder(0, 2)
-        .with_vgap(GAP)
-        .with_hgap(GAP * 2)
+        .with_vgap(px(GAP))
+        .with_hgap(px(GAP * 2))
         .build();
     grid.add_growable_col(1, 1);
     grid
@@ -181,7 +184,8 @@ fn choice_with(parent: &Panel, items: Vec<String>) -> Choice {
 // ---------------------------------------------------------------------------
 
 fn page_general(panel: &Panel, current: &Settings, readers: &mut Readers) {
-    let grid = form_grid();
+    let px = |v: i32| panel.from_dip_int(v);
+    let grid = form_grid(panel);
 
     // 表示言語: 先頭が "システムに従う"、以降は locales/ の言語
     let languages = i18n::available();
@@ -268,10 +272,10 @@ fn page_general(panel: &Panel, current: &Settings, readers: &mut Readers) {
     grid.add(&instance, 0, SizerFlag::AlignLeft, 0);
 
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
-    sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, GAP);
-    sizer.add(&note, 0, SizerFlag::Expand | SizerFlag::All, GAP);
+    sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
+    sizer.add(&note, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
     panel.set_sizer(sizer, true);
-    note.wrap(360);
+    note.wrap(px(360));
 
     readers.push(Box::new(move |s| {
         let idx = choice.get_selection().unwrap_or(0) as usize;
@@ -318,7 +322,8 @@ fn bottom_width_key(value: BottomWidth) -> &'static str {
 // ---------------------------------------------------------------------------
 
 fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers) {
-    let grid = form_grid();
+    let px = |v: i32| panel.from_dip_int(v);
+    let grid = form_grid(panel);
 
     // 同梱の UDEV Gothic (既定) を先頭に、続いて等幅フォント、残りを後に (どちらも名前順)。手入力もできる
     let embedded = crate::fonts::EDITOR_FONT_FAMILY;
@@ -461,14 +466,14 @@ fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers) {
         .build();
 
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
-    sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, GAP);
+    sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
     sizer.add(
         &highlight_changes,
         0,
         SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
-        GAP,
+        px(GAP),
     );
-    sizer.add(&show_ruler, 0, SizerFlag::Left | SizerFlag::Right, GAP);
+    sizer.add(&show_ruler, 0, SizerFlag::Left | SizerFlag::Right, px(GAP));
     panel.set_sizer(sizer, true);
 
     readers.push(Box::new(move |s| {
@@ -513,7 +518,8 @@ fn saved_changes_key(value: SavedChanges) -> &'static str {
 // ---------------------------------------------------------------------------
 
 fn page_files(panel: &Panel, current: &Settings, readers: &mut Readers) {
-    let grid = form_grid();
+    let px = |v: i32| panel.from_dip_int(v);
+    let grid = form_grid(panel);
 
     // 新規タブの形式
     let default_type = choice_with(
@@ -566,8 +572,8 @@ fn page_files(panel: &Panel, current: &Settings, readers: &mut Readers) {
         .with_label(&tr("settings.files.panes_note"))
         .build();
     let panes_grid = FlexGridSizer::builder(0, 5)
-        .with_vgap(GAP / 2)
-        .with_hgap(GAP * 2)
+        .with_vgap(px(GAP / 2))
+        .with_hgap(px(GAP * 2))
         .build();
     let mut pane_boxes: Vec<(FileType, CheckBox, CheckBox, CheckBox, CheckBox)> = Vec::new();
     for ft in FileType::ALL {
@@ -605,8 +611,8 @@ fn page_files(panel: &Panel, current: &Settings, readers: &mut Readers) {
         .with_label(&tr("settings.files.sync_note"))
         .build();
     let sync_grid = FlexGridSizer::builder(0, 3)
-        .with_vgap(GAP / 2)
-        .with_hgap(GAP * 2)
+        .with_vgap(px(GAP / 2))
+        .with_hgap(px(GAP * 2))
         .build();
     let mut sync_boxes: Vec<(FileType, CheckBox, CheckBox)> = Vec::new();
     for ft in FileType::ALL.into_iter().filter(|ft| ft.has_scroll_sync()) {
@@ -630,8 +636,8 @@ fn page_files(panel: &Panel, current: &Settings, readers: &mut Readers) {
         .with_label(&tr("settings.files.open_note"))
         .build();
     let open_grid = FlexGridSizer::builder(0, 2)
-        .with_vgap(GAP / 2)
-        .with_hgap(GAP * 2)
+        .with_vgap(px(GAP / 2))
+        .with_hgap(px(GAP * 2))
         .build();
     let mut open_boxes: Vec<(FileType, CheckBox)> = Vec::new();
     for ft in FileType::ALL.into_iter().filter(|ft| ft.has_preview()) {
@@ -645,34 +651,34 @@ fn page_files(panel: &Panel, current: &Settings, readers: &mut Readers) {
     }
 
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
-    sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, GAP);
+    sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
     sizer.add(
         &numbering,
         0,
         SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
-        GAP,
+        px(GAP),
     );
     sizer.add(
         &note,
         0,
         SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-        GAP,
+        px(GAP),
     );
-    sizer.add_sizer(&panes_grid, 0, SizerFlag::Expand | SizerFlag::All, GAP);
+    sizer.add_sizer(&panes_grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
     sizer.add(
         &sync_note,
         0,
         SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-        GAP,
+        px(GAP),
     );
-    sizer.add_sizer(&sync_grid, 0, SizerFlag::Expand | SizerFlag::All, GAP);
+    sizer.add_sizer(&sync_grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
     sizer.add(
         &open_note,
         0,
         SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-        GAP,
+        px(GAP),
     );
-    sizer.add_sizer(&open_grid, 0, SizerFlag::Expand | SizerFlag::All, GAP);
+    sizer.add_sizer(&open_grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
     panel.set_sizer(sizer, true);
 
     readers.push(Box::new(move |s| {
@@ -736,6 +742,7 @@ fn page_template_typ(panel: &Panel, current: &Settings, readers: &mut Readers) {
 
 /// 形式ごとの雛形 (Ctrl+N と起動時の新規タブの中身)。複数行のテキストと「既定に戻す」
 fn page_template(panel: &Panel, current: &Settings, readers: &mut Readers, ft: FileType) {
+    let px = |v: i32| panel.from_dip_int(v);
     let note = StaticText::builder(panel)
         .with_label(&tr_args(
             "settings.files.template_note",
@@ -759,14 +766,14 @@ fn page_template(panel: &Panel, current: &Settings, readers: &mut Readers, ft: F
     reset.on_click(move |_| text.set_value(&ft.default_template()));
 
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
-    sizer.add(&note, 0, SizerFlag::Expand | SizerFlag::All, GAP);
+    sizer.add(&note, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
     sizer.add(
         &text,
         1,
         SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right,
-        GAP,
+        px(GAP),
     );
-    sizer.add(&reset, 0, SizerFlag::AlignRight | SizerFlag::All, GAP);
+    sizer.add(&reset, 0, SizerFlag::AlignRight | SizerFlag::All, px(GAP));
     panel.set_sizer(sizer, true);
 
     readers.push(Box::new(move |s| {
@@ -781,7 +788,8 @@ fn page_template(panel: &Panel, current: &Settings, readers: &mut Readers, ft: F
 // ---------------------------------------------------------------------------
 
 fn page_preview(panel: &Panel, current: &Settings, readers: &mut Readers) {
-    let grid = form_grid();
+    let px = |v: i32| panel.from_dip_int(v);
+    let grid = form_grid(panel);
 
     // プレビューのフォント (Typst の既定・Markdown の本文・プレビューウィンドウ)。同梱の Noto Sans JP を先頭に
     let embedded = typball_core::EMBEDDED_FONT_FAMILY;
@@ -876,23 +884,23 @@ fn page_preview(panel: &Panel, current: &Settings, readers: &mut Readers) {
         .build();
 
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
-    sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, GAP);
+    sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
     sizer.add(
         &font_note,
         0,
         SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
-        GAP,
+        px(GAP),
     );
     sizer.add(
         &note,
         0,
         SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
-        GAP,
+        px(GAP),
     );
     panel.set_sizer(sizer, true);
     // 折り返しはサイザーに入れてから (先に Wrap すると wxMSW で高さが折り返し前のまま残り、末尾の行が隠れる)
-    font_note.wrap(520);
-    note.wrap(520);
+    font_note.wrap(px(520));
+    note.wrap(px(520));
     panel.layout();
 
     readers.push(Box::new(move |s| {
@@ -924,12 +932,13 @@ fn page_preview(panel: &Panel, current: &Settings, readers: &mut Readers) {
 }
 
 fn page_update(panel: &Panel, current: &Settings, readers: &mut Readers) {
+    let px = |v: i32| panel.from_dip_int(v);
     let check = CheckBox::builder(panel)
         .with_label(&tr("settings.update.check_on_startup"))
         .build();
     check.set_value(current.update.check_on_startup);
 
-    let grid = form_grid();
+    let grid = form_grid(panel);
     let channel = choice_with(
         panel,
         Channel::ALL.iter().map(|c| tr(channel_key(*c))).collect(),
@@ -955,16 +964,16 @@ fn page_update(panel: &Panel, current: &Settings, readers: &mut Readers) {
             &[("url", crate::update::RELEASES_URL), ("version", &version)],
         ))
         .build();
-    note.wrap(520);
+    note.wrap(px(520));
 
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
-    sizer.add(&check, 0, SizerFlag::All, GAP);
-    sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, GAP);
+    sizer.add(&check, 0, SizerFlag::All, px(GAP));
+    sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
     sizer.add(
         &note,
         0,
         SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
-        GAP,
+        px(GAP),
     );
     panel.set_sizer(sizer, true);
 

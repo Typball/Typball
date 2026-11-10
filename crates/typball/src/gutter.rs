@@ -8,8 +8,7 @@
 use wxdragon::prelude::*;
 
 use crate::editor::{
-    self, rgb, LineChange, CHANGE_STRIP_WIDTH, GUTTER_BG, GUTTER_FG, GUTTER_FG_MODIFIED,
-    GUTTER_FG_SAVED,
+    self, rgb, LineChange, GUTTER_BG, GUTTER_FG, GUTTER_FG_MODIFIED, GUTTER_FG_SAVED,
 };
 use crate::scintilla;
 use crate::settings::{self, Settings};
@@ -71,7 +70,7 @@ impl Ruler {
 
 /// ルーラーの高さ = 本文 1 行の高さ
 fn ruler_height(stc: &StyledTextCtrl) -> i32 {
-    scintilla::text_height(stc, 0).clamp(14, 64)
+    scintilla::text_height(stc, 0).clamp(stc.from_dip_int(14), stc.from_dip_int(64))
 }
 
 fn paint_ruler(panel: &Panel, stc: &StyledTextCtrl) {
@@ -124,12 +123,13 @@ fn paint_ruler(panel: &Panel, stc: &StyledTextCtrl) {
         col += 1;
     }
 
-    // キャレット位置の黒いマーカー (下半分、幅 5px)
+    // キャレット位置の黒いマーカー (下半分、幅 5 DIP)
     let caret_x = scintilla::point_x_from_position(stc, stc.get_current_pos());
     if caret_x >= 0 && caret_x < right {
         dc.set_pen(rgb(editor::SEPARATOR_COLOR), 1, PenStyle::Solid);
         dc.set_brush(rgb(editor::SEPARATOR_COLOR), BrushStyle::Solid);
-        dc.draw_rectangle(caret_x - 2, height / 2, 5, height - 1 - height / 2);
+        let w = panel.from_dip_int(5) | 1;
+        dc.draw_rectangle(caret_x - w / 2, height / 2, w, height - 1 - height / 2);
     }
 }
 
@@ -177,21 +177,20 @@ impl RightGutter {
     }
 }
 
-fn strip_width(settings: &Settings) -> i32 {
-    if settings.editor.highlight_changes {
-        CHANGE_STRIP_WIDTH
-    } else {
-        0
-    }
+/// 右余白 3 DIP (+ 帯と余白 2 DIP)
+fn right_pad(stc: &StyledTextCtrl, strip: i32) -> i32 {
+    stc.from_dip_int(3)
+        + if strip > 0 {
+            strip + stc.from_dip_int(2)
+        } else {
+            0
+        }
 }
 
-/// 境界線 1px + 左余白 4px + 数字 + 右余白 3px (+ 帯と余白)
+/// 境界線 1px + 左余白 4 DIP + 数字 + 右余白
 fn gutter_width(stc: &StyledTextCtrl, settings: &Settings) -> i32 {
-    let strip = strip_width(settings);
-    1 + 4
-        + editor::digits(stc) * editor::digit_width(stc)
-        + 3
-        + if strip > 0 { strip + 2 } else { 0 }
+    let strip = editor::change_strip_width(stc, settings);
+    1 + stc.from_dip_int(4) + editor::digits(stc) * editor::digit_width(stc) + right_pad(stc, strip)
 }
 
 fn paint_gutter(panel: &Panel, stc: &StyledTextCtrl) {
@@ -211,8 +210,8 @@ fn paint_gutter(panel: &Panel, stc: &StyledTextCtrl) {
     ) else {
         return;
     };
-    let strip = strip_width(&settings);
-    let right_pad = 3 + if strip > 0 { strip + 2 } else { 0 };
+    let strip = editor::change_strip_width(stc, &settings);
+    let right_pad = right_pad(stc, strip);
 
     let first_visible = scintilla::first_visible_line(stc);
     let last_line = stc.get_line_count() - 1;

@@ -61,14 +61,25 @@ use crate::settings::{self, BottomWidth, PanePosition, PaneSizes, Settings};
 use crate::tabbar::{TabBar, TabItem};
 use crate::webpreview::{self, WebPreview};
 
+/// 置き場の最小の大きさ (DIP)
 const MIN_PANE: i32 = 80;
 /// プレビューを組み直すまでの待ち時間 (ms)。連続する変更とサイズイベントをまとめる
 const RENDER_DELAY_MS: i32 = 20;
 /// ペインのヘッダのメニューの ID: PANE_MENU_BASE + ペイン番号 * 8 + 項目
 const PANE_MENU_BASE: i32 = wxdragon::id::ID_HIGHEST + 200;
 
-/// ステータスバーの欄: 0 = メッセージ, 1 = 種別, 2 = 行・桁, 3 = 文字数, 4 = 文字コード
+/// ステータスバーの欄: 0 = メッセージ, 1 = 種別, 2 = 行・桁, 3 = 文字数, 4 = 文字コード。
+/// 幅は DIP (-1 は残り全部)。[`status_widths`] で実ピクセルにして渡す
 pub const STATUS_FIELD_WIDTHS: [i32; 5] = [-1, 80, 150, 110, 130];
+
+/// ステータスバーの欄の幅 (実ピクセル)。wx はステータスバーの欄の幅を拡大率の変化に合わせて
+/// 直さないので、ウィンドウが拡大率の違うモニターへ移ったらもう一度当てる
+pub fn status_widths<W: WxWidget>(window: &W) -> Vec<i32> {
+    STATUS_FIELD_WIDTHS
+        .iter()
+        .map(|w| if *w > 0 { window.from_dip_int(*w) } else { *w })
+        .collect()
+}
 
 /// タブを入れる先 (ウィンドウ側の部品)
 #[derive(Clone)]
@@ -109,7 +120,7 @@ fn new_splitter<W: WxWidget>(parent: &W) -> SplitterWindow {
     let s = SplitterWindow::builder(parent)
         .with_style(SplitterWindowStyle::LiveUpdate | SplitterWindowStyle::Default)
         .build();
-    s.set_minimum_pane_size(MIN_PANE);
+    s.set_minimum_pane_size(parent.from_dip_int(MIN_PANE));
     s
 }
 
@@ -216,7 +227,9 @@ pub struct Tab {
     gutter: RightGutter,
     panes: Rc<RefCell<[PaneInfo; 3]>>,
     /// 置き場の幅 (左 / 右) と高さ (下)。分割位置を動かすと更新して形式ごとの設定
-    /// (`[filetypes.*] pane_sizes`) に保存し、置き直すときと同じ形式の新しいタブで使う
+    /// (`[filetypes.*] pane_sizes`) に保存し、置き直すときと同じ形式の新しいタブで使う。
+    /// 単位は DIP (拡大率 100% 換算)。実ピクセルのまま覚えると、拡大率の違うモニターへ
+    /// ウィンドウを移したときに右・下の置き場が元の見た目より狭く (広く) なる
     pane_sizes: Rc<RefCell<[i32; 3]>>,
     /// プレビューの組版をまとめて後回しにするための単発タイマー
     render_timer: Rc<Timer<Panel>>,
@@ -436,7 +449,8 @@ impl Tab {
         stc.on_size({
             let tab = self.clone();
             move |_| {
-                editor::update_wrap_margin(&stc, &settings::get());
+                // 拡大率の違うモニターへ移ったときもここに来るので、余白などの寸法ごと合わせ直す
+                editor::update_margins(&stc, &settings::get());
                 tab.refresh_decorations()
             }
         });
@@ -571,8 +585,8 @@ impl Tab {
                     };
                     // 隠れているページにも wx がサッシを詰めるときにこのイベントを送ってくる
                     // (小さい古いサイズに合わせた値) ので、見えているページの操作だけを覚える
-                    if size >= MIN_PANE && tab.page.is_shown() {
-                        sizes.borrow_mut()[position.index()] = size;
+                    if size >= splitter.from_dip_int(MIN_PANE) && tab.page.is_shown() {
+                        sizes.borrow_mut()[position.index()] = splitter.to_dip_int(size);
                         tab.save_pane_sizes();
                     }
                 }
@@ -590,8 +604,9 @@ impl Tab {
                 if total <= 0 {
                     return;
                 }
-                let want = sizes.borrow()[position.index()];
-                splitter.set_sash_position((total - want).max(MIN_PANE), false);
+                let want = splitter.from_dip_int(sizes.borrow()[position.index()]);
+                let min = splitter.from_dip_int(MIN_PANE);
+                splitter.set_sash_position((total - want).max(min), false);
             });
         }
     }
@@ -1035,7 +1050,9 @@ impl Tab {
     /// (作った直後の) スプリッタでも、wx が最初のサイズ確定時に反映してくれる
     fn attach_slot(&self, position: PanePosition) {
         let slot = self.slot(position);
-        let size = self.pane_sizes.borrow()[position.index()];
+        let size = self
+            .page
+            .from_dip_int(self.pane_sizes.borrow()[position.index()]);
         slot.show(true);
         match position {
             PanePosition::Left => {
@@ -1209,12 +1226,17 @@ impl Tab {
             Some(r) => (Point::new(r.x, r.y), Size::new(r.width, r.height)),
             None => {
                 let r = pane::frame_rect(&self.host.frame);
-                (Point::new(r.x + 60, r.y + 60), Size::new(360, 520))
+                let offset = self.host.frame.from_dip_int(60);
+                (
+                    Point::new(r.x + offset, r.y + offset),
+                    self.host.frame.from_dip(Size::new(360, 520)),
+                )
             }
         };
         let dropped = at.is_some();
         if let Some(p) = at {
-            pos = Point::new(p.x - 40, p.y - 12);
+            let grab = self.host.frame.from_dip_point(Point::new(40, 12));
+            pos = Point::new(p.x - grab.x, p.y - grab.y);
         }
         if state == PaneState::Docked {
             self.unplace(which);
@@ -1300,10 +1322,12 @@ impl Tab {
             if total <= 0 {
                 continue;
             }
-            let want = self.pane_sizes.borrow()[position.index()];
+            let want = splitter.from_dip_int(self.pane_sizes.borrow()[position.index()]);
             let sash = match position {
                 PanePosition::Left => want,
-                PanePosition::Right | PanePosition::Bottom => (total - want).max(MIN_PANE),
+                PanePosition::Right | PanePosition::Bottom => {
+                    (total - want).max(splitter.from_dip_int(MIN_PANE))
+                }
             };
             splitter.set_sash_position(sash, true);
         }
@@ -1444,7 +1468,9 @@ impl Tab {
             };
         }
         let page = pane::widget_rect(&self.page);
-        let size = self.pane_sizes.borrow()[position.index()];
+        let size = self
+            .page
+            .from_dip_int(self.pane_sizes.borrow()[position.index()]);
         let rect = match position {
             PanePosition::Left => Rect::new(page.x, page.y, size, page.height),
             PanePosition::Right => Rect::new(page.x + page.width - size, page.y, size, page.height),

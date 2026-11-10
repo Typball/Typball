@@ -19,7 +19,7 @@ use crate::editor::rgb;
 use crate::gutter::drawing_panel;
 use crate::i18n::tr;
 use crate::settings::PanePosition;
-use crate::theme::{self, contains, fill_round_rect, mouse_pos};
+use crate::theme::{self, contains, fill_round_rect, mouse_pos, Dip};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HeaderButton {
@@ -36,6 +36,7 @@ const BUTTONS: [HeaderButton; 3] = [
     HeaderButton::Float,
     HeaderButton::Collapse,
 ];
+// 寸法は DIP (拡大率 100% 換算)。使うときに `Dip::px` で実ピクセルに直す
 const BTN: i32 = 18;
 const DRAG_THRESHOLD: i32 = 6;
 
@@ -64,7 +65,8 @@ impl PaneHeader {
     /// `title_key` は i18n のキー ("pane.outline" など)
     pub fn new(parent: &Panel, title_key: &str, floating: bool, edge: PanePosition) -> PaneHeader {
         let font = theme::ui_font(true, false, 0);
-        let height = parent.get_char_height().max(12) + 10;
+        let height =
+            parent.get_char_height().max(parent.from_dip_int(12)) + parent.from_dip_int(10);
         let panel = drawing_panel(parent, Size::new(-1, height));
         if let Some(f) = &font {
             panel.set_font(f);
@@ -108,10 +110,12 @@ impl PaneHeader {
 
     fn button_rect(&self, button: HeaderButton) -> Rect {
         let Size { width, height } = self.panel.get_client_size();
-        let y = (height - BTN) / 2;
+        let dip = Dip::of(&self.panel);
+        let btn = dip.px(BTN);
+        let y = (height - btn) / 2;
         // 右から Collapse, Float, Menu の順
         let slot = BUTTONS.iter().rev().position(|b| *b == button).unwrap_or(0) as i32;
-        Rect::new(width - 4 - BTN - slot * (BTN + 2), y, BTN, BTN)
+        Rect::new(width - dip.px(4 + BTN + slot * (BTN + 2)), y, btn, btn)
     }
 
     fn hit_button(&self, p: Point) -> Option<HeaderButton> {
@@ -162,6 +166,7 @@ impl PaneHeader {
                     return;
                 };
                 let hover = h.hit_button(p);
+                let threshold = h.panel.from_dip_int(DRAG_THRESHOLD);
                 let (changed, dragging) = {
                     let mut st = h.state.borrow_mut();
                     let mut changed = st.hover != hover;
@@ -169,8 +174,8 @@ impl PaneHeader {
                     let mut dragging = false;
                     if let Some((start, moving)) = st.drag.as_mut() {
                         if !*moving
-                            && ((p.x - start.x).abs() > DRAG_THRESHOLD
-                                || (p.y - start.y).abs() > DRAG_THRESHOLD)
+                            && ((p.x - start.x).abs() > threshold
+                                || (p.y - start.y).abs() > threshold)
                         {
                             *moving = true;
                             changed = true;
@@ -241,6 +246,8 @@ impl PaneHeader {
     fn paint(&self) {
         let dc = AutoBufferedPaintDC::new(&self.panel);
         let Size { width, height } = self.panel.get_client_size();
+        let dip = Dip::of(&self.panel);
+        let d = |v: i32| dip.px(v);
         dc.set_background(rgb(theme::HEADER_BG));
         dc.clear();
         dc.set_pen(rgb(theme::BORDER), 1, PenStyle::Solid);
@@ -253,15 +260,16 @@ impl PaneHeader {
         // つかめることが分かるように左端に 2 列の点々 (グリップ)
         dc.set_pen(rgb(0xa0a0a0), 1, PenStyle::Solid);
         dc.set_brush(rgb(0xa0a0a0), BrushStyle::Solid);
+        let dot = d(2);
         for row in 0..3 {
             for col in 0..2 {
-                dc.draw_rectangle(5 + col * 4, height / 2 - 5 + row * 4, 2, 2);
+                dc.draw_rectangle(d(5 + col * 4), height / 2 + d(-5 + row * 4), dot, dot);
             }
         }
-        let title = theme::ellipsize(&self.panel, &st.title, (width - BTN * 3 - 28).max(0));
+        let title = theme::ellipsize(&self.panel, &st.title, (width - d(BTN * 3 + 28)).max(0));
         let (_, th) = dc.get_text_extent(&title);
         dc.set_text_foreground(rgb(theme::TEXT_DIM));
-        dc.draw_text(&title, 16, (height - th) / 2);
+        dc.draw_text(&title, d(16), (height - th) / 2);
 
         for button in BUTTONS {
             let r = self.button_rect(button);
@@ -274,7 +282,7 @@ impl PaneHeader {
                     r.y,
                     r.width,
                     r.height,
-                    3.0,
+                    dip.pxf(3.0),
                     if pressed {
                         theme::PRESSED_BG
                     } else {
@@ -283,56 +291,70 @@ impl PaneHeader {
                 );
             }
             let (cx, cy) = (r.x + r.width / 2, r.y + r.height / 2);
-            dc.set_pen(rgb(theme::TEXT_DIM), 1, PenStyle::Solid);
+            dc.set_pen(rgb(theme::TEXT_DIM), dip.pen(), PenStyle::Solid);
             dc.set_brush(rgb(theme::TEXT_DIM), BrushStyle::Solid);
             match button {
                 HeaderButton::Menu => {
                     // 下向きの小さな三角
                     let pts = [
-                        DcPoint::new(cx - 4, cy - 2),
-                        DcPoint::new(cx + 4, cy - 2),
-                        DcPoint::new(cx, cy + 3),
+                        DcPoint::new(cx - d(4), cy - d(2)),
+                        DcPoint::new(cx + d(4), cy - d(2)),
+                        DcPoint::new(cx, cy + d(3)),
                     ];
                     dc.draw_polygon(&pts, 0, 0, PolygonFillMode::OddEven);
                 }
-                HeaderButton::Float => paint_float_icon(&dc, cx, cy, theme::TEXT_DIM, st.floating),
-                HeaderButton::Collapse => paint_chevron(&dc, cx, cy, st.edge),
+                HeaderButton::Float => {
+                    paint_float_icon(&dc, cx, cy, theme::TEXT_DIM, st.floating, dip)
+                }
+                HeaderButton::Collapse => paint_chevron(&dc, cx, cy, st.edge, dip),
             }
         }
     }
 }
 
 /// 切り離す: 枠から右上へ出る矢印。戻す: 枠へ向かう矢印
-fn paint_float_icon(dc: &dyn DeviceContext, cx: i32, cy: i32, colour: u32, floating: bool) {
-    dc.set_pen(rgb(colour), 1, PenStyle::Solid);
+fn paint_float_icon(
+    dc: &dyn DeviceContext,
+    cx: i32,
+    cy: i32,
+    colour: u32,
+    floating: bool,
+    dip: Dip,
+) {
+    let d = |v: i32| dip.px(v);
+    let line = |x1: i32, y1: i32, x2: i32, y2: i32| {
+        dc.draw_line(cx + d(x1), cy + d(y1), cx + d(x2), cy + d(y2));
+    };
+    dc.set_pen(rgb(colour), dip.pen(), PenStyle::Solid);
     dc.set_brush(rgb(colour), BrushStyle::Transparent);
-    dc.draw_rectangle(cx - 6, cy - 2, 8, 8);
+    dc.draw_rectangle(cx - d(6), cy - d(2), d(8), d(8));
     if floating {
-        dc.draw_line(cx + 5, cy - 5, cx - 1, cy + 1);
-        dc.draw_line(cx - 1, cy + 1, cx - 1, cy - 3);
-        dc.draw_line(cx - 1, cy + 1, cx + 3, cy + 1);
+        line(5, -5, -1, 1);
+        line(-1, 1, -1, -3);
+        line(-1, 1, 3, 1);
     } else {
-        dc.draw_line(cx - 1, cy + 1, cx + 5, cy - 5);
-        dc.draw_line(cx + 5, cy - 5, cx + 1, cy - 5);
-        dc.draw_line(cx + 5, cy - 5, cx + 5, cy - 1);
+        line(-1, 1, 5, -5);
+        line(5, -5, 1, -5);
+        line(5, -5, 5, -1);
     }
 }
 
 /// 折りたたむ向きの二重の山形 (左端へ «、右端へ »、下へ ⌄⌄)
-fn paint_chevron(dc: &dyn DeviceContext, cx: i32, cy: i32, edge: PanePosition) {
+fn paint_chevron(dc: &dyn DeviceContext, cx: i32, cy: i32, edge: PanePosition, dip: Dip) {
+    let d = |v: i32| dip.px(v);
     let (dx, dy) = match edge {
         PanePosition::Left => (-1, 0),
         PanePosition::Right => (1, 0),
         PanePosition::Bottom => (0, 1),
     };
     for k in [-2, 2] {
-        let (ox, oy) = (cx + dx * k, cy + dy * k);
+        let (ox, oy) = (cx + dx * d(k), cy + dy * d(k));
         if dy == 0 {
-            dc.draw_line(ox - dx * 2, oy - 4, ox + dx * 2, oy);
-            dc.draw_line(ox + dx * 2, oy, ox - dx * 2, oy + 4);
+            dc.draw_line(ox - dx * d(2), oy - d(4), ox + dx * d(2), oy);
+            dc.draw_line(ox + dx * d(2), oy, ox - dx * d(2), oy + d(4));
         } else {
-            dc.draw_line(ox - 4, oy - 2, ox, oy + 2);
-            dc.draw_line(ox, oy + 2, ox + 4, oy - 2);
+            dc.draw_line(ox - d(4), oy - d(2), ox, oy + d(2));
+            dc.draw_line(ox, oy + d(2), ox + d(4), oy - d(2));
         }
     }
 }
@@ -391,11 +413,15 @@ impl FloatingPane {
         size: Size,
         edge: PanePosition,
     ) -> FloatingPane {
+        let min = parent.from_dip(Size::new(240, 200));
         let frame = Frame::builder()
             .with_parent(parent)
             .with_title(title)
             .with_position(pos)
-            .with_size(Size::new(size.width.max(240), size.height.max(200)))
+            .with_size(Size::new(
+                size.width.max(min.width),
+                size.height.max(min.height),
+            ))
             .with_style(FrameStyle::Default | FrameStyle::FloatOnParent)
             .build();
         crate::appicon::apply(&frame);
@@ -462,18 +488,25 @@ impl DropIndicator {
             move |_| {
                 let dc = AutoBufferedPaintDC::new(&panel);
                 let Size { width, height } = panel.get_client_size();
+                let dip = Dip::of(&panel);
+                let border = dip.px(2).max(2);
                 dc.set_background(rgb(theme::DROP_MARKER));
                 dc.clear();
-                dc.set_pen(rgb(0xffffff), 2, PenStyle::Solid);
+                dc.set_pen(rgb(0xffffff), border, PenStyle::Solid);
                 dc.set_brush(rgb(0xffffff), BrushStyle::Transparent);
-                dc.draw_rectangle(1, 1, width - 2, height - 2);
+                let inset = border / 2;
+                dc.draw_rectangle(inset, inset, width - border, height - border);
                 if let Some(f) = &font {
                     dc.set_font(f);
                 }
                 let text = label.borrow().clone();
                 let (tw, th) = dc.get_text_extent(&text);
                 dc.set_text_foreground(rgb(0xffffff));
-                dc.draw_text(&text, ((width - tw) / 2).max(4), ((height - th) / 2).max(2));
+                dc.draw_text(
+                    &text,
+                    ((width - tw) / 2).max(dip.px(4)),
+                    ((height - th) / 2).max(dip.px(2)),
+                );
             }
         });
         DropIndicator {
@@ -580,7 +613,8 @@ const STRIP_PAD: i32 = 4;
 impl Strip {
     pub fn new(parent: &Panel, edge: PanePosition) -> Strip {
         let font = theme::ui_font(false, false, 0);
-        let thickness = parent.get_char_height().max(12) + 10;
+        let thickness =
+            parent.get_char_height().max(parent.from_dip_int(12)) + parent.from_dip_int(10);
         let size = if edge.is_side() {
             Size::new(thickness, -1)
         } else {
@@ -628,20 +662,22 @@ impl Strip {
 
     fn relayout(&self) {
         let Size { width, height } = self.panel.get_client_size();
+        let dip = Dip::of(&self.panel);
+        let d = |v: i32| dip.px(v);
         let mut st = self.state.borrow_mut();
         let side = st.edge.is_side();
-        let mut offset = 6;
+        let mut offset = d(6);
         st.rects = st
             .items
             .iter()
             .map(|(_, title)| {
-                let len = self.panel.get_text_extent(title).width + 20;
+                let len = self.panel.get_text_extent(title).width + d(20);
                 let r = if side {
-                    Rect::new(3, offset, width - 6, len)
+                    Rect::new(d(3), offset, width - d(6), len)
                 } else {
-                    Rect::new(offset, 3, len, height - 6)
+                    Rect::new(offset, d(3), len, height - d(6))
                 };
-                offset += len + STRIP_PAD;
+                offset += len + d(STRIP_PAD);
                 r
             })
             .collect();
@@ -712,6 +748,7 @@ impl Strip {
     fn paint(&self) {
         let dc = AutoBufferedPaintDC::new(&self.panel);
         let Size { width, height } = self.panel.get_client_size();
+        let radius = Dip::of(&self.panel).pxf(4.0);
         dc.set_background(rgb(theme::BAR_BG));
         dc.clear();
         let st = self.state.borrow();
@@ -731,10 +768,10 @@ impl Strip {
             } else {
                 theme::TAB_INACTIVE
             };
-            fill_round_rect(&dc, r.x, r.y, r.width, r.height, 4.0, bg);
+            fill_round_rect(&dc, r.x, r.y, r.width, r.height, radius, bg);
             dc.set_pen(rgb(theme::BORDER), 1, PenStyle::Solid);
             dc.set_brush(rgb(bg), BrushStyle::Transparent);
-            dc.draw_rounded_rectangle(r.x, r.y, r.width, r.height, 4.0);
+            dc.draw_rounded_rectangle(r.x, r.y, r.width, r.height, radius);
             dc.set_text_foreground(rgb(theme::TEXT_DIM));
             let (tw, th) = dc.get_text_extent(title);
             if st.edge.is_side() {

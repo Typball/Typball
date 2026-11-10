@@ -151,13 +151,13 @@ impl WebPreview {
                 &choice,
                 0,
                 SizerFlag::AlignCenterVertical | SizerFlag::All,
-                4,
+                panel.from_dip_int(4),
             );
             hbox.add(
                 &label,
                 1,
                 SizerFlag::AlignCenterVertical | SizerFlag::All,
-                4,
+                panel.from_dip_int(4),
             );
             panel.set_sizer(hbox, true);
             sizer.add(&panel, 0, SizerFlag::Expand, 0);
@@ -175,8 +175,13 @@ impl WebPreview {
             let text = StaticText::builder(&container)
                 .with_label(&tr("preview.webview_missing"))
                 .build();
-            text.wrap(360);
-            sizer.add(&text, 1, SizerFlag::Expand | SizerFlag::All, 12);
+            text.wrap(container.from_dip_int(360));
+            sizer.add(
+                &text,
+                1,
+                SizerFlag::Expand | SizerFlag::All,
+                container.from_dip_int(12),
+            );
             None
         };
         container.set_sizer(sizer, true);

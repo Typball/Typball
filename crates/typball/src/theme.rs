@@ -31,6 +31,45 @@ pub const HEADER_BG: u32 = 0xe8e8e8;
 /// タブバーの挿入位置マーカーと ↓ バッジの色
 pub const DROP_MARKER: u32 = 0x0b5cad;
 
+/// ウィンドウの拡大率 (DPI / 96)。自前で描く部品の寸法・座標は DIP (拡大率 100% 換算) で書き、
+/// 描画・当たり判定・サイズ指定のたびにこれで実ピクセルに直す。
+///
+/// Windows (Per-Monitor V2) の wx はウィンドウ座標が実ピクセルで、拡大率はモニターごとに違う。
+/// 一方フォントは wx が描く先のウィンドウの DPI に合わせて大きくする (wxMSWDCImpl::SetFont の
+/// WXAdjustToPPI) ので、寸法を固定ピクセルで書くと 175% のモニターでは文字だけが大きくなって
+/// 枠からはみ出す (タブの "M" やアクションバーの "B" が欠けた)。拡大率はウィンドウが別の
+/// モニターへ移ると変わるので、覚えておかずに使う直前に取る。GTK / macOS は論理座標なので常に 1
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Dip(f64);
+
+impl Dip {
+    pub fn of<W: WxWidget>(window: &W) -> Dip {
+        // from_dip_int は DPI / 96 を掛けて丸めるので、大きな値で割合を取る
+        const BASE: i32 = 9600;
+        let scaled = window.from_dip_int(BASE);
+        Dip(if scaled > 0 {
+            scaled as f64 / BASE as f64
+        } else {
+            1.0
+        })
+    }
+
+    /// DIP → 実ピクセル
+    pub fn px(self, v: i32) -> i32 {
+        (v as f64 * self.0).round() as i32
+    }
+
+    /// DIP → 実ピクセル (小数。角丸の半径など)
+    pub fn pxf(self, v: f64) -> f64 {
+        v * self.0
+    }
+
+    /// 絵 (アイコン) の線の太さ。100% で 1px の線を拡大率に合わせて太らせる (150% 以上で 2px)
+    pub fn pen(self) -> i32 {
+        self.px(1).max(1)
+    }
+}
+
 /// OS の既定 GUI フォントが取れなかったときの UI フォント: OS の標準的な日本語フォント
 const SYSTEM_FONT_FACE: &str = if cfg!(target_os = "windows") {
     "Yu Gothic UI"
@@ -86,9 +125,9 @@ pub fn fill_round_rect(
     dc.draw_rounded_rectangle(x, y, w, h, r);
 }
 
-/// × 印 (閉じるボタン)。`size` は × の一辺
-pub fn draw_cross(dc: &dyn DeviceContext, cx: i32, cy: i32, size: i32, colour: u32) {
-    dc.set_pen(rgb(colour), 1, PenStyle::Solid);
+/// × 印 (閉じるボタン)。`size` は × の一辺、`pen` は線の太さ (どちらも実ピクセル)
+pub fn draw_cross(dc: &dyn DeviceContext, cx: i32, cy: i32, size: i32, pen: i32, colour: u32) {
+    dc.set_pen(rgb(colour), pen, PenStyle::Solid);
     let h = size / 2;
     dc.draw_line(cx - h, cy - h, cx + h + 1, cy + h + 1);
     dc.draw_line(cx - h, cy + h, cx + h + 1, cy - h - 1);
@@ -152,59 +191,72 @@ pub enum Badge {
     Forbidden,
 }
 
+/// カーソルの一辺 (DIP)
 const CURSOR_SIZE: i32 = 36;
 /// 透明にする色 (描画には使わない色)
 const KEY: u32 = 0xff00ff;
 
-/// 矢印の右下に `icon` (16px) とバッジを描いたカーソルを作る。ホットスポットは左上 (矢印の先)。
+/// 矢印の右下に `icon` とバッジを描いたカーソルを作る。ホットスポットは左上 (矢印の先)。
+/// `icon(dc, x, y, size)` は左上 (x, y) に一辺 `size` px のアイコンを描く。
+/// 大きさはドラッグしているウィンドウの拡大率 `dip` に合わせる (OS のカーソルも拡大率で大きくなる)。
 /// マウスをつかんでいる間は [`show_drag_cursor`] で出すと、ウィンドウの外でもこのカーソルになる
-pub fn drag_cursor(icon: &dyn Fn(&dyn DeviceContext, i32, i32), badge: Badge) -> Option<Cursor> {
-    let mut bitmap = Bitmap::new(CURSOR_SIZE, CURSOR_SIZE)?;
+pub fn drag_cursor(
+    icon: &dyn Fn(&dyn DeviceContext, i32, i32, i32),
+    badge: Badge,
+    dip: Dip,
+) -> Option<Cursor> {
+    let d = |v: i32| dip.px(v);
+    let size = d(CURSOR_SIZE);
+    let pen = dip.pen();
+    let mut bitmap = Bitmap::new(size, size)?;
     {
         let mut dc = MemoryDC::new();
         dc.select_object(&mut bitmap);
         dc.set_background(rgb(KEY));
         dc.clear();
         // 矢印
-        dc.set_pen(rgb(0x000000), 1, PenStyle::Solid);
+        dc.set_pen(rgb(0x000000), pen, PenStyle::Solid);
         dc.set_brush(rgb(0xffffff), BrushStyle::Solid);
+        let o = pen / 2;
         let arrow = [
-            DcPoint::new(0, 0),
-            DcPoint::new(0, 15),
-            DcPoint::new(4, 11),
-            DcPoint::new(7, 17),
-            DcPoint::new(9, 16),
-            DcPoint::new(6, 10),
-            DcPoint::new(11, 10),
-        ];
+            (0, 0),
+            (0, 15),
+            (4, 11),
+            (7, 17),
+            (9, 16),
+            (6, 10),
+            (11, 10),
+        ]
+        .map(|(x, y)| DcPoint::new(o + d(x), o + d(y)));
         dc.draw_polygon(&arrow, 0, 0, PolygonFillMode::OddEven);
         // アイコン (白い角丸の台座に乗せる)
-        fill_round_rect(&dc, 12, 12, 22, 22, 4.0, 0xffffff);
+        fill_round_rect(&dc, d(12), d(12), d(22), d(22), dip.pxf(4.0), 0xffffff);
         dc.set_pen(rgb(BORDER), 1, PenStyle::Solid);
         dc.set_brush(rgb(0xffffff), BrushStyle::Transparent);
-        dc.draw_rounded_rectangle(12, 12, 22, 22, 4.0);
-        icon(&dc, 15, 15);
+        dc.draw_rounded_rectangle(d(12), d(12), d(22), d(22), dip.pxf(4.0));
+        icon(&dc, d(15), d(15), d(16));
         // バッジ
-        let (cx, cy, r) = (29, 29, 6);
+        let (cx, cy, r) = (d(29), d(29), d(6));
+        let stroke = d(2).max(2);
         match badge {
             Badge::None => {}
             Badge::NewWindow => {
                 circle(&dc, cx, cy, r, 0x2e8b57);
-                dc.set_pen(rgb(0xffffff), 2, PenStyle::Solid);
-                dc.draw_line(cx - 3, cy, cx + 4, cy);
-                dc.draw_line(cx, cy - 3, cx, cy + 4);
+                dc.set_pen(rgb(0xffffff), stroke, PenStyle::Solid);
+                dc.draw_line(cx - d(3), cy, cx + d(4), cy);
+                dc.draw_line(cx, cy - d(3), cx, cy + d(4));
             }
             Badge::Insert => {
                 circle(&dc, cx, cy, r, DROP_MARKER);
-                dc.set_pen(rgb(0xffffff), 2, PenStyle::Solid);
-                dc.draw_line(cx, cy - 3, cx, cy + 4);
-                dc.draw_line(cx - 3, cy + 1, cx, cy + 4);
-                dc.draw_line(cx + 3, cy + 1, cx, cy + 4);
+                dc.set_pen(rgb(0xffffff), stroke, PenStyle::Solid);
+                dc.draw_line(cx, cy - d(3), cx, cy + d(4));
+                dc.draw_line(cx - d(3), cy + d(1), cx, cy + d(4));
+                dc.draw_line(cx + d(3), cy + d(1), cx, cy + d(4));
             }
             Badge::Forbidden => {
                 circle(&dc, cx, cy, r, 0xc0392b);
-                dc.set_pen(rgb(0xffffff), 2, PenStyle::Solid);
-                dc.draw_line(cx - 3, cy - 3, cx + 4, cy + 4);
+                dc.set_pen(rgb(0xffffff), stroke, PenStyle::Solid);
+                dc.draw_line(cx - d(3), cy - d(3), cx + d(4), cy + d(4));
             }
         }
     }
@@ -215,7 +267,7 @@ pub fn drag_cursor(icon: &dyn Fn(&dyn DeviceContext, i32, i32), badge: Badge) ->
         let key = px[0] == 0xff && px[1] == 0x00 && px[2] == 0xff;
         px[3] = if key { 0 } else { 0xff };
     }
-    let image = Bitmap::from_rgba(&data, CURSOR_SIZE as u32, CURSOR_SIZE as u32)?;
+    let image = Bitmap::from_rgba(&data, size as u32, size as u32)?;
     Cursor::from_bitmap(&image)
 }
 

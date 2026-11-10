@@ -116,8 +116,9 @@ impl Viewer {
         let edit = Button::builder(&bar).with_label(&tr("viewer.edit")).build();
         edit.set_tooltip(&tr("viewer.edit_tip"));
         let hbox = BoxSizer::builder(Orientation::Horizontal).build();
-        hbox.add(&name, 1, SizerFlag::AlignCenterVertical | SizerFlag::All, 6);
-        hbox.add(&edit, 0, SizerFlag::AlignCenterVertical | SizerFlag::All, 4);
+        let center_all = SizerFlag::AlignCenterVertical | SizerFlag::All;
+        hbox.add(&name, 1, center_all, frame.from_dip_int(6));
+        hbox.add(&edit, 0, center_all, frame.from_dip_int(4));
         bar.set_sizer(hbox, true);
 
         let body = Panel::builder(&frame).build();

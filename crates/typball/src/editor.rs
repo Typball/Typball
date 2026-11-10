@@ -48,6 +48,19 @@ const MARKER_SAVED_MASK: i32 = 1 << MARKER_SAVED;
 
 /// 編集した行の帯の幅 (px)。右側の行番号 (`gutter.rs`) も同じ幅で描く
 pub const CHANGE_STRIP_WIDTH: i32 = 4;
+/// 境界線と本文の間の余白 (DIP)
+const TEXT_GAP: i32 = 3;
+/// キャレットの太さ (DIP)
+const CARET_WIDTH: i32 = 2;
+
+/// 編集行の帯の幅 (実ピクセル。強調オフなら 0)
+pub fn change_strip_width(stc: &StyledTextCtrl, settings: &Settings) -> i32 {
+    if settings.editor.highlight_changes {
+        stc.from_dip_int(CHANGE_STRIP_WIDTH)
+    } else {
+        0
+    }
+}
 
 /// 行番号まわりの配色 (左マージンと右側の自前描画で共通)
 pub const GUTTER_BG: u32 = 0xf5f5f5;
@@ -169,15 +182,12 @@ pub fn setup_editor(stc: &StyledTextCtrl, settings: &Settings) {
     scintilla::set_margin_mask(stc, MARGIN_LINENUMBERS, 0);
     stc.set_margin_type_typed(MARGIN_SEPARATOR, MarginType::Fore);
     scintilla::set_margin_mask(stc, MARGIN_SEPARATOR, 0);
-    // 境界線と本文の間を少し空ける
-    scintilla::set_margin_left(stc, 3);
 
     apply_colors(stc, settings);
 
     // 現在行の強調
     stc.set_caret_line_visible(true);
     stc.set_caret_line_background(rgb(0xf3f3f3));
-    stc.set_caret_width(2);
 
     apply_settings(stc, settings);
 }
@@ -256,14 +266,22 @@ pub fn digit_width(stc: &StyledTextCtrl) -> i32 {
 
 /// 左側マージンの幅を設定・行数・ズームに合わせる (変更が無ければ Scintilla 側で no-op)
 pub fn update_margins(stc: &StyledTextCtrl, settings: &Settings) {
-    let strip = if settings.editor.highlight_changes {
-        CHANGE_STRIP_WIDTH
-    } else {
-        0
-    };
+    // 寸法は DIP で決めて、エディタのある画面の拡大率で実ピクセルにする。ウィンドウが拡大率の
+    // 違うモニターへ移ったときは wx がマージン幅を比例で直す (wxStyledTextCtrl::OnDPIChanged) が、
+    // 余白とキャレットは直さないので、ここで毎回合わせる (値が同じなら何もしない)
+    let gap = stc.from_dip_int(TEXT_GAP);
+    if scintilla::margin_left(stc) != gap {
+        // 境界線と本文の間を少し空ける
+        scintilla::set_margin_left(stc, gap);
+    }
+    let caret = stc.from_dip_int(CARET_WIDTH);
+    if stc.get_caret_width() != caret {
+        stc.set_caret_width(caret);
+    }
+    let strip = change_strip_width(stc, settings);
     let numbers = if settings.editor.line_numbers.left() {
         // RText マージンは右端に 3px の余白を取る。左にも少し足す
-        digits(stc) * digit_width(stc) + 7
+        digits(stc) * digit_width(stc) + stc.from_dip_int(7)
     } else {
         0
     };

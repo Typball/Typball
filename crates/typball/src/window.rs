@@ -11,7 +11,7 @@
 //! 選択中のページの前に挿入したり選択中のページを抜いたりすると隣のページを表示・フォーカス
 //! してしまい、見えている内容と入力先がずれる)。`tabs` はタブバーと同じ並び。
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 
@@ -27,7 +27,7 @@ use crate::filetype::FileType;
 use crate::i18n::{self, tr, tr_args};
 use crate::settings::{self, ExternalChange, LastTab, LineNumbers, Settings, Wrap};
 use crate::settings_dialog;
-use crate::tab::{Tab, TabHost, STATUS_FIELD_WIDTHS};
+use crate::tab::{status_widths, Tab, TabHost, STATUS_FIELD_WIDTHS};
 use crate::tabbar::{DragTarget, TabBar};
 use crate::theme::{contains, inflate};
 use crate::update_dialog;
@@ -83,7 +83,7 @@ const EXTERNAL_CHECK_MS: i32 = 2000;
 /// | wxFULL_REPAINT_ON_RESIZE (= wxSTB_DEFAULT_STYLE)。右下にサイズ変更のつまみが出る
 const STATUS_BAR_STYLE: i64 = 0x0010 | 0x0020 | 0x0100 | 0x0001_0000;
 
-/// タブバーの外にドロップしたとき、このぶんだけ外れていても「そのバーへ」とみなす (px)
+/// タブバーの外にドロップしたとき、このぶんだけ外れていても「そのバーへ」とみなす (DIP)
 const DROP_MARGIN: i32 = 24;
 
 pub struct MainWindow {
@@ -260,7 +260,19 @@ fn build_window(position: Option<Point>) -> WindowRef {
         -1,
         "status",
     );
-    status.set_status_widths(&STATUS_FIELD_WIDTHS);
+    status.set_status_widths(&status_widths(&frame));
+    // 拡大率の違うモニターへ移ったら欄の幅を当て直す (wx は WM_DPICHANGED を処理したあとに
+    // ウィンドウの大きさを変えるので、サイズイベントで拡大率の変化を見る)
+    frame.on_size({
+        let scale = Cell::new(frame.from_dip_int(9600));
+        move |_| {
+            let now = frame.from_dip_int(9600);
+            if now != scale.get() {
+                scale.set(now);
+                status.set_status_widths(&status_widths(&frame));
+            }
+        }
+    });
 
     let panel = Panel::builder(&frame).build();
     let tabbar = TabBar::new(&panel);
@@ -1435,7 +1447,10 @@ fn window_under_tabbar(win: &WindowRef, screen: Point) -> Option<WindowRef> {
         if Rc::ptr_eq(other, win) {
             return false;
         }
-        let rect = inflate(&other.borrow().host.tabbar.screen_rect(), DROP_MARGIN);
+        let other = other.borrow();
+        // 余白はそのウィンドウのある画面の拡大率で換算する
+        let margin = other.frame.from_dip_int(DROP_MARGIN);
+        let rect = inflate(&other.host.tabbar.screen_rect(), margin);
         contains(&rect, screen)
     })
 }
@@ -1475,7 +1490,13 @@ fn drop_tab(win: &WindowRef, tab: &Tab, screen: Point) {
     if win.borrow().tabs.len() <= 1 {
         return;
     }
-    detach_tab(win, tab, Some(Point::new(screen.x - 80, screen.y - 20)));
+    // ポインタがタイトルバーの左寄りに来るようにずらす
+    let grab = win.borrow().frame.from_dip_point(Point::new(80, 20));
+    detach_tab(
+        win,
+        tab,
+        Some(Point::new(screen.x - grab.x, screen.y - grab.y)),
+    );
 }
 
 // ---------------------------------------------------------------------------

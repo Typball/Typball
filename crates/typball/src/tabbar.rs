@@ -22,7 +22,7 @@ use crate::filetype::FileType;
 use crate::gutter::drawing_panel;
 use wxdragon::dc::{Point as DcPoint, PolygonFillMode};
 
-use crate::theme::{self, contains, draw_cross, ellipsize, fill_round_rect, mouse_pos, Badge};
+use crate::theme::{self, contains, draw_cross, ellipsize, fill_round_rect, mouse_pos, Badge, Dip};
 
 /// バーの外へドラッグしたときの行き先 (呼び出し側が判定する)
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -44,15 +44,16 @@ pub struct TabItem {
     pub modified: bool,
 }
 
+// 寸法はすべて DIP (拡大率 100% 換算)。使うときに `Dip::px` で実ピクセルに直す
 const PAD_X: i32 = 8;
 const ICON: i32 = 16;
 const CLOSE: i32 = 16;
 const MIN_TAB: i32 = 72;
 const MAX_TAB: i32 = 240;
 const MIN_SHRUNK: i32 = 48;
-/// これ以上動かしたらドラッグとみなす (px)
+/// これ以上動かしたらドラッグとみなす
 const DRAG_THRESHOLD: i32 = 6;
-/// バーからこれ以上離れて離すと「外へ出した」とみなす (px)
+/// バーからこれ以上離れて離すと「外へ出した」とみなす
 const DETACH_MARGIN: i32 = 32;
 
 type Handler<T> = Option<Rc<dyn Fn(T)>>;
@@ -111,7 +112,7 @@ impl TabBar {
             .map(|_| parent.get_char_height())
             .unwrap_or(16)
             .max(12);
-        let height = text_h + 14;
+        let height = text_h + parent.from_dip_int(14);
         let panel = drawing_panel(parent, Size::new(-1, height));
         if let Some(f) = &font {
             panel.set_font(f);
@@ -326,6 +327,8 @@ impl TabBar {
     fn relayout(&self) {
         let width = self.panel.get_client_size().width;
         let height = self.panel.get_client_size().height;
+        let dip = Dip::of(&self.panel);
+        let d = |v: i32| dip.px(v);
         let mut st = self.state.borrow_mut();
         let n = st.items.len() as i32;
         let mut widths: Vec<i32> = st
@@ -334,17 +337,17 @@ impl TabBar {
             .map(|it| {
                 let label = label_of(it);
                 let tw = self.panel.get_text_extent(&label).width;
-                (PAD_X + ICON + 6 + tw + 6 + CLOSE + 6).clamp(MIN_TAB, MAX_TAB)
+                (d(PAD_X + ICON + 6) + tw + d(6 + CLOSE + 6)).clamp(d(MIN_TAB), d(MAX_TAB))
             })
             .collect();
-        let total: i32 = widths.iter().sum::<i32>() + 4;
+        let total: i32 = widths.iter().sum::<i32>() + d(4);
         if n > 0 && total > width {
-            let each = ((width - 4) / n).max(MIN_SHRUNK);
+            let each = ((width - d(4)) / n).max(d(MIN_SHRUNK));
             for w in &mut widths {
                 *w = (*w).min(each);
             }
         }
-        let mut x = 4;
+        let mut x = d(4);
         st.rects = widths
             .iter()
             .map(|w| {
@@ -362,20 +365,22 @@ impl TabBar {
         st.rects.iter().position(|r| contains(r, p))
     }
 
-    fn close_rect(rect: &Rect) -> Rect {
+    fn close_rect(rect: &Rect, dip: Dip) -> Rect {
+        let size = dip.px(CLOSE);
         Rect::new(
-            rect.x + rect.width - CLOSE - 6,
-            rect.y + (rect.height - CLOSE) / 2 + 1,
-            CLOSE,
-            CLOSE,
+            rect.x + rect.width - size - dip.px(6),
+            rect.y + (rect.height - size) / 2 + dip.px(1),
+            size,
+            size,
         )
     }
 
     fn hit_close(&self, p: Point) -> Option<usize> {
+        let dip = Dip::of(&self.panel);
         let st = self.state.borrow();
         st.rects
             .iter()
-            .position(|r| contains(&Self::close_rect(r), p))
+            .position(|r| contains(&Self::close_rect(r, dip), p))
     }
 
     // -----------------------------------------------------------------------
@@ -516,10 +521,11 @@ impl TabBar {
     /// バーの矩形 (クライアント座標) の外か。少し余裕を持たせる
     fn is_outside(&self, p: Point) -> bool {
         let size = self.panel.get_client_size();
-        p.y < -DETACH_MARGIN
-            || p.y > size.height + DETACH_MARGIN
-            || p.x < -DETACH_MARGIN * 2
-            || p.x > size.width + DETACH_MARGIN * 2
+        let margin = self.panel.from_dip_int(DETACH_MARGIN);
+        p.y < -margin
+            || p.y > size.height + margin
+            || p.x < -margin * 2
+            || p.x > size.width + margin * 2
     }
 
     /// ドラッグ中のカーソルを行き先に合わせる
@@ -556,13 +562,18 @@ impl TabBar {
         if let Some(d) = self.state.borrow_mut().drag.as_mut() {
             d.badge = Some(badge);
         }
-        let cursor = theme::drag_cursor(&|dc, x, y| paint_icon(dc, filetype, x, y), badge);
+        let cursor = theme::drag_cursor(
+            &|dc, x, y, size| paint_icon(dc, filetype, x, y, size),
+            badge,
+            Dip::of(&self.panel),
+        );
         theme::show_drag_cursor(cursor.as_ref());
     }
 
     fn motion(&self, p: Point) {
         let hover = self.hit_test(p);
         let hover_close = self.hit_close(p).is_some();
+        let threshold = self.panel.from_dip_int(DRAG_THRESHOLD);
         let mut reorder: Option<(usize, usize)> = None;
         {
             let mut st = self.state.borrow_mut();
@@ -571,8 +582,8 @@ impl TabBar {
             st.hover_close = hover_close;
             if let Some(drag) = st.drag.as_mut() {
                 if !drag.moving
-                    && ((p.x - drag.start.x).abs() > DRAG_THRESHOLD
-                        || (p.y - drag.start.y).abs() > DRAG_THRESHOLD)
+                    && ((p.x - drag.start.x).abs() > threshold
+                        || (p.y - drag.start.y).abs() > threshold)
                 {
                     drag.moving = true;
                 }
@@ -619,7 +630,11 @@ impl TabBar {
             let mut st = self.state.borrow_mut();
             let close = match st.press_close.take() {
                 Some(i)
-                    if st.rects.get(i).map(|r| contains(&Self::close_rect(r), p)) == Some(true) =>
+                    if st
+                        .rects
+                        .get(i)
+                        .map(|r| contains(&Self::close_rect(r, Dip::of(&self.panel)), p))
+                        == Some(true) =>
                 {
                     Some(i)
                 }
@@ -662,6 +677,8 @@ impl TabBar {
     fn paint(&self) {
         let dc = AutoBufferedPaintDC::new(&self.panel);
         let Size { width, height } = self.panel.get_client_size();
+        let dip = Dip::of(&self.panel);
+        let d = |v: i32| dip.px(v);
         dc.set_background(rgb(theme::BAR_BG));
         dc.clear();
         let st = self.state.borrow();
@@ -683,15 +700,16 @@ impl TabBar {
         if let Some(i) = st.drop_marker {
             let x = match st.rects.get(i) {
                 Some(r) => r.x,
-                None => st.rects.last().map(|r| r.x + r.width).unwrap_or(4),
+                None => st.rects.last().map(|r| r.x + r.width).unwrap_or(d(4)),
             };
             dc.set_pen(rgb(theme::DROP_MARKER), 1, PenStyle::Solid);
             dc.set_brush(rgb(theme::DROP_MARKER), BrushStyle::Solid);
-            dc.draw_rectangle(x - 1, 2, 3, height - 3);
+            let bar = d(3);
+            dc.draw_rectangle(x - bar / 2, d(2), bar, height - d(3));
             let tri = [
-                DcPoint::new(x - 5, 0),
-                DcPoint::new(x + 6, 0),
-                DcPoint::new(x, 6),
+                DcPoint::new(x - d(5), 0),
+                DcPoint::new(x + d(6), 0),
+                DcPoint::new(x, d(6)),
             ];
             dc.draw_polygon(&tri, 0, 0, PolygonFillMode::OddEven);
         }
@@ -716,7 +734,10 @@ impl TabBar {
     ) {
         let selected = st.selected == Some(index);
         let hovered = st.hover == Some(index);
-        let top = if selected { 2 } else { 4 };
+        let dip = Dip::of(&self.panel);
+        let d = |v: i32| dip.px(v);
+        let radius = dip.pxf(5.0);
+        let top = if selected { d(2) } else { d(4) };
         let bg = if selected {
             theme::TAB_ACTIVE
         } else if hovered || floating {
@@ -726,10 +747,19 @@ impl TabBar {
         };
         // タブ本体 (上だけ角丸: 角丸矩形を下へはみ出させて描く)
         dc.set_clipping_region(rect.x, top, rect.width, rect.height - top);
-        fill_round_rect(dc, rect.x, top, rect.width, rect.height - top + 6, 5.0, bg);
+        let below = d(6);
+        fill_round_rect(
+            dc,
+            rect.x,
+            top,
+            rect.width,
+            rect.height - top + below,
+            radius,
+            bg,
+        );
         dc.set_pen(rgb(theme::BORDER), 1, PenStyle::Solid);
         dc.set_brush(rgb(bg), BrushStyle::Transparent);
-        dc.draw_rounded_rectangle(rect.x, top, rect.width, rect.height - top + 6, 5.0);
+        dc.draw_rounded_rectangle(rect.x, top, rect.width, rect.height - top + below, radius);
         dc.destroy_clipping_region();
         if selected && !floating {
             // ページとつなげる: 下の境界線を消す
@@ -743,16 +773,17 @@ impl TabBar {
         }
 
         // アイコン
-        let icon_y = top + (rect.height - top - ICON) / 2;
-        paint_icon(dc, item.filetype, rect.x + PAD_X, icon_y);
+        let icon = d(ICON);
+        let icon_y = top + (rect.height - top - icon) / 2;
+        paint_icon(dc, item.filetype, rect.x + d(PAD_X), icon_y, icon);
 
         // 文字 (閉じるボタンの手前まで)
-        let text_x = rect.x + PAD_X + ICON + 6;
+        let text_x = rect.x + d(PAD_X + ICON + 6);
         let show_close = selected || hovered || floating;
         let text_right = if show_close {
-            rect.x + rect.width - CLOSE - 8
+            rect.x + rect.width - d(CLOSE + 8)
         } else {
-            rect.x + rect.width - 6
+            rect.x + rect.width - d(6)
         };
         let label = ellipsize(&self.panel, &label_of(item), (text_right - text_x).max(0));
         let (_, th) = dc.get_text_extent(&label);
@@ -767,16 +798,25 @@ impl TabBar {
 
         // 閉じるボタン
         if show_close {
-            let c = Self::close_rect(rect);
+            let c = Self::close_rect(rect, dip);
             let hot = hovered && st.hover_close;
             if hot {
-                fill_round_rect(dc, c.x, c.y, c.width, c.height, 3.0, theme::CLOSE_HOVER);
+                fill_round_rect(
+                    dc,
+                    c.x,
+                    c.y,
+                    c.width,
+                    c.height,
+                    dip.pxf(3.0),
+                    theme::CLOSE_HOVER,
+                );
             }
             draw_cross(
                 dc,
                 c.x + c.width / 2,
                 c.y + c.height / 2,
-                7,
+                d(7),
+                dip.pen(),
                 if hot { 0xffffff } else { theme::TEXT_DIM },
             );
         }
@@ -792,30 +832,53 @@ fn label_of(item: &TabItem) -> String {
     }
 }
 
-/// 種別のアイコン (16px): テキストは罫線入りの紙、Markdown は青の "M"、Typst は青緑の "T"
-pub fn paint_icon(dc: &dyn DeviceContext, filetype: FileType, x: i32, y: i32) {
+/// 種別のアイコン: テキストは罫線入りの紙、Markdown は青の "M"、Typst は青緑の "T"。
+/// 左上 (x, y) に一辺 `size` px で描く (絵は 16px で設計してあり、`size` に合わせて拡大する)
+pub fn paint_icon(dc: &dyn DeviceContext, filetype: FileType, x: i32, y: i32, size: i32) {
+    let scale = size as f64 / ICON as f64;
+    let s = |v: i32| (v as f64 * scale).round() as i32;
+    let pen = s(1).max(1);
     match filetype {
         FileType::Txt => {
-            dc.set_pen(rgb(0x8a8a8a), 1, PenStyle::Solid);
+            dc.set_pen(rgb(0x8a8a8a), pen, PenStyle::Solid);
             dc.set_brush(rgb(0xffffff), BrushStyle::Solid);
-            dc.draw_rectangle(x + 2, y + 1, 12, 14);
-            dc.set_pen(rgb(0x9a9a9a), 1, PenStyle::Solid);
+            dc.draw_rectangle(x + s(2), y + s(1), s(12), s(14));
+            dc.set_pen(rgb(0x9a9a9a), pen, PenStyle::Solid);
             for i in 0..4 {
-                let ly = y + 4 + i * 3;
-                dc.draw_line(x + 4, ly, x + 12 - if i == 3 { 4 } else { 0 }, ly);
+                let ly = y + s(4 + i * 3);
+                dc.draw_line(x + s(4), ly, x + s(12 - if i == 3 { 4 } else { 0 }), ly);
             }
         }
-        FileType::Md => badge(dc, x, y, 0x0b5cad, "M"),
-        FileType::Typ => badge(dc, x, y, 0x239dad, "T"),
+        FileType::Md => badge(dc, x, y, size, 0x0b5cad, "M"),
+        FileType::Typ => badge(dc, x, y, size, 0x239dad, "T"),
     }
 }
 
-fn badge(dc: &dyn DeviceContext, x: i32, y: i32, colour: u32, letter: &str) {
-    fill_round_rect(dc, x, y, ICON, ICON, 3.0, colour);
-    if let Some(font) = theme::ui_font(true, false, 0) {
-        dc.set_font(&font);
-    }
+fn badge(dc: &dyn DeviceContext, x: i32, y: i32, size: i32, colour: u32, letter: &str) {
+    fill_round_rect(
+        dc,
+        x,
+        y,
+        size,
+        size,
+        3.0 * size as f64 / ICON as f64,
+        colour,
+    );
     dc.set_text_foreground(rgb(0xffffff));
-    let (tw, th) = dc.get_text_extent(letter);
-    dc.draw_text(letter, x + (ICON - tw) / 2, y + (ICON - th) / 2);
+    // 文字の大きさは描く先の DC で決まる (ウィンドウの DC は wx がそのウィンドウの DPI に合わせ、
+    // カーソル用の MemoryDC は主モニターの DPI のまま)。どちらでも台座に収まるよう、
+    // 行の高さが台座を明らかに超えるあいだポイント数を下げる (行の高さには上下の余白が
+    // 含まれるので、台座の 1.25 倍までは字が収まる)
+    let mut extent = (0, 0);
+    for delta in [0, -1, -2, -3, -4, -5] {
+        if let Some(font) = theme::ui_font(true, false, delta) {
+            dc.set_font(&font);
+        }
+        extent = dc.get_text_extent(letter);
+        if extent.1 * 4 <= size * 5 {
+            break;
+        }
+    }
+    let (tw, th) = extent;
+    dc.draw_text(letter, x + (size - tw) / 2, y + (size - th) / 2);
 }
