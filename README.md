@@ -14,7 +14,7 @@ Windows / macOS / Linux で動くネイティブアプリで、Windows の日本
 | Typst | [Typst](https://typst.app/) 0.15 を内蔵しているので、ネットワークや別途のインストールは不要です。日本語フォント Noto Sans JP も内蔵しているため、どの OS でも同じ見た目で組めます。PDF に書き出せます |
 | Markdown | 表・脚注・タスクリスト・GFM アラート・コードの色付け・画像に対応したプレビュー。エディタとプレビューのスクロールが連動します |
 | サイトモード | Hugo などのプロジェクト内の `.md` を開くと開発サーバーを起動し、実際のサイトの見た目でプレビューします。保存すると更新されます |
-| エディタ | Typst の構文の色分け、行番号 (左・右・両側)、ルーラー、折り返し (なし / ウィンドウの右端 / 指定文字数)、対応括弧の強調、編集した行の強調 (未保存はオレンジ、保存済みは青) |
+| エディタ | 日本語対応の等幅フォント UDEV Gothic を内蔵 (半角と全角が 1:2 で桁がそろう)。Typst の構文の色分け、行番号 (左・右・両側)、ルーラー、折り返し (なし / ウィンドウの右端 / 指定文字数)、対応括弧の強調、編集した行の強調 (未保存はオレンジ、保存済みは青) |
 | 検索・置換 | 入力に合わせて探すインクリメンタル検索。大文字小文字の区別・単語単位・正規表現、すべて置換 |
 | アクション | 太字・斜体・見出し・コード・リンク・箇条書きなどを、エディタ上部のボタンやメニューから付け外しできます |
 | タブとウィンドウ | 1 つのウィンドウに複数のタブ。タブをウィンドウの外へドラッグすると新しいウィンドウになり、別のウィンドウへも移せます |
@@ -99,7 +99,7 @@ language = "system"   # "system" / "ja" / "en"
 last_tab = "keep_empty"     # 最後のタブを閉じたとき: "keep_empty" (空のタブを残す) / "close_window" (ウィンドウを閉じる。最後のウィンドウなら終了)
 
 [editor]
-font_face = "Yu Gothic UI"  # エディタの中身だけに効く (ルーラー・行番号・コンソール・タブなどの UI は OS の既定 GUI フォント)
+font_face = "UDEV Gothic"   # 既定は同梱の等幅フォント UDEV Gothic (未インストールでも使える)。エディタの中身だけに効く (ルーラー・行番号・コンソール・タブなどの UI は OS の既定 GUI フォント)
 font_size = 11
 tab_width = 2
 wrap = "window"             # 折り返し: "none" / "window" (ウィンドウの右端) / "column" (指定文字数)
@@ -234,6 +234,7 @@ macOS / Linux のアーカイブ) にも同梱しています。アプリでは 
 | 含まれるもの | ライセンス |
 |---|---|
 | Noto Sans JP (Regular / Bold)。© 2014-2021 Adobe | SIL Open Font License 1.1 |
+| UDEV Gothic (Regular / Bold)。© 2022 Yuko OTAWARA。BIZ UDゴシック (© 2022 The BIZ UDGothic Project Authors) と JetBrains Mono (© 2020 The JetBrains Mono Project Authors) の合成 | SIL Open Font License 1.1 |
 | Typst 同梱フォント: Libertinus Serif | SIL Open Font License 1.1 |
 | Typst 同梱フォント: New Computer Modern / NewCM Math | GUST Font License 1.0 (NewCM10-Regular は GPL-3.0 以降 + Font Exception + Distribution Exception) |
 | Typst 同梱フォント: DejaVu Sans Mono | Bitstream Vera / Arev Fonts License (DejaVu の変更部分はパブリックドメイン) |

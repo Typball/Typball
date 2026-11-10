@@ -176,6 +176,7 @@ website = "GitHub リポジトリ"
 third_party = """
 同梱しているフォントとソフトウェア:
 ・Noto Sans JP — SIL Open Font License 1.1
+・UDEV Gothic (BIZ UDゴシック + JetBrains Mono) — SIL Open Font License 1.1
 ・Typst 同梱フォント
     Libertinus Serif — SIL Open Font License 1.1
     New Computer Modern — GUST Font License 1.0

@@ -320,13 +320,17 @@ fn bottom_width_key(value: BottomWidth) -> &'static str {
 fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers) {
     let grid = form_grid();
 
-    // 等幅フォントを先に、残りを後に (どちらも名前順)。手入力もできる
+    // 同梱の UDEV Gothic (既定) を先頭に、続いて等幅フォント、残りを後に (どちらも名前順)。手入力もできる
+    let embedded = crate::fonts::EDITOR_FONT_FAMILY;
     let families = typball_core::system_font_families();
-    let mut choices: Vec<String> = families
-        .iter()
-        .filter(|f| f.monospace)
-        .map(|f| f.name.clone())
-        .collect();
+    let mut choices: Vec<String> = vec![embedded.to_string()];
+    choices.extend(
+        families
+            .iter()
+            .filter(|f| f.monospace)
+            .map(|f| f.name.clone())
+            .filter(|name| name != embedded),
+    );
     choices.extend(
         families
             .iter()

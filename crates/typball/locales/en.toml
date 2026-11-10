@@ -176,6 +176,7 @@ website = "GitHub repository"
 third_party = """
 Bundled fonts and software:
 - Noto Sans JP — SIL Open Font License 1.1
+- UDEV Gothic (BIZ UDGothic + JetBrains Mono) — SIL Open Font License 1.1
 - Fonts bundled with Typst
     Libertinus Serif — SIL Open Font License 1.1
     New Computer Modern — GUST Font License 1.0

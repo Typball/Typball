@@ -4,6 +4,7 @@
 
 元にするもの:
 - Noto Sans JP: crates/typball-core/fonts/LICENSE-NotoSansJP.txt
+- UDEV Gothic (と元の BIZ UDゴシック・JetBrains Mono): crates/typball/fonts/LICENSE-UDEVGothic.txt
 - Typst 同梱のフォントとデータ: typst-assets クレートの NOTICE
 - Typst: Apache License 2.0 (typst-assets に入っている同じ全文を使う)
 - wxWidgets と、wxWidgets が内蔵するライブラリ (Scintilla / Lexilla・libpng・zlib・libjpeg・libtiff・Expat・
@@ -183,7 +184,10 @@ def main():
         "Typball 本体は MIT License です (LICENSE を参照)。実行ファイルには次の第三者のフォントと",
         "ソフトウェアが含まれており、それぞれ下記のライセンスに従います。",
         "",
-        "  1. Noto Sans JP (Regular / Bold) ........ SIL Open Font License 1.1",
+        "  1. Bundled Japanese fonts",
+        "     - Noto Sans JP (Regular / Bold) ........ SIL Open Font License 1.1",
+        "     - UDEV Gothic (Regular / Bold) ......... SIL Open Font License 1.1",
+        "       (composite of BIZ UDGothic and JetBrains Mono, both SIL Open Font License 1.1)",
         f"  2. Fonts and data bundled with Typst (typst-assets {assets['version']})",
         "     - Libertinus Serif ..................... SIL Open Font License 1.1",
         "     - New Computer Modern / NewCM Math ..... GUST Font License 1.0",
@@ -215,8 +219,12 @@ def main():
         parts.extend([RULE, title, RULE, "", body, ""])
 
     section(
-        "1. Noto Sans JP (https://github.com/notofonts/noto-cjk)",
+        "1.1 Noto Sans JP (https://github.com/notofonts/noto-cjk)",
         read(os.path.join(ROOT, "crates", "typball-core", "fonts", "LICENSE-NotoSansJP.txt")),
+    )
+    section(
+        "1.2 UDEV Gothic (https://github.com/yuru7/udev-gothic)",
+        read(os.path.join(ROOT, "crates", "typball", "fonts", "LICENSE-UDEVGothic.txt")),
     )
     section(
         f"2. Fonts and data bundled with Typst (typst-assets {assets['version']}, https://github.com/typst/typst-assets)\n"

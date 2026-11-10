@@ -31,6 +31,15 @@ pub const HEADER_BG: u32 = 0xe8e8e8;
 /// タブバーの挿入位置マーカーと ↓ バッジの色
 pub const DROP_MARKER: u32 = 0x0b5cad;
 
+/// OS の既定 GUI フォントが取れなかったときの UI フォント: OS の標準的な日本語フォント
+const SYSTEM_FONT_FACE: &str = if cfg!(target_os = "windows") {
+    "Yu Gothic UI"
+} else if cfg!(target_os = "macos") {
+    "Hiragino Sans"
+} else {
+    "Noto Sans CJK JP"
+};
+
 /// UI 部品 (タブバー・ペインのヘッダ・アクションバーなど) のフォント。OS の既定の GUI フォント
 /// (メニューと同じ。Windows 11 なら Yu Gothic UI 9pt) に合わせ、`delta_pt` でポイント数を増減する。
 /// 設定のフォントはエディタの中身だけに使い、ここでは見ない
@@ -40,7 +49,7 @@ pub fn ui_font(bold: bool, italic: bool, delta_pt: i32) -> Option<Font> {
         .as_ref()
         .map(|f| f.get_face_name())
         .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| crate::settings::DEFAULT_FONT_FACE.to_string());
+        .unwrap_or_else(|| SYSTEM_FONT_FACE.to_string());
     let base = system
         .as_ref()
         .map(|f| f.get_point_size())

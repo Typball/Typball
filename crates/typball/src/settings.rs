@@ -321,15 +321,9 @@ pub struct Editor {
     pub show_ruler: bool,
 }
 
-/// 既定のエディタフォント: OS の標準的な日本語フォント (UI と同じ系統で小さい文字が読みやすい)。
+/// 既定のエディタフォント: 同梱の UDEV Gothic (日本語対応の等幅で、半角と全角が 1:2。どの OS でも同じ)。
 /// 同梱の Noto Sans JP はプレビュー側の既定 (`Preview::font_face`)
-pub const DEFAULT_FONT_FACE: &str = if cfg!(target_os = "windows") {
-    "Yu Gothic UI"
-} else if cfg!(target_os = "macos") {
-    "Hiragino Sans"
-} else {
-    "Noto Sans CJK JP"
-};
+pub const DEFAULT_FONT_FACE: &str = crate::fonts::EDITOR_FONT_FAMILY;
 
 impl Default for Editor {
     fn default() -> Self {

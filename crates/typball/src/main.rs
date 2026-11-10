@@ -25,7 +25,7 @@
 //! - `update.rs`          GitHub Releases での更新の確認・取得・検証・自分自身の入れ替え
 //! - `update_dialog.rs`   更新のダイアログと進捗表示 (ヘルプ → 更新を確認、起動時の自動確認)
 //! - `instance.rs`        シングルインスタンス (2 つ目の起動は先行プロセスにファイルを渡して終わる)
-//! - `fonts_win.rs`       同梱フォント (Noto Sans JP) を Windows の GDI にプロセス専用で登録する
+//! - `fonts.rs`           同梱フォント (Noto Sans JP・UDEV Gothic) を OS にプロセス専用で登録する
 //! - `settings.rs`        設定の構造体と TOML ファイル (Settings.toml) の読み書き
 //! - `settings_dialog.rs` 設定ダイアログ
 //! - `i18n.rs`            UI 文字列の多言語対応
@@ -43,8 +43,7 @@ mod editmenu;
 mod editor;
 mod filetype;
 mod findbar;
-#[cfg(windows)]
-mod fonts_win;
+mod fonts;
 mod gutter;
 mod i18n;
 #[cfg(windows)]
@@ -137,15 +136,14 @@ fn main() {
         None
     };
 
-    // 同梱の Noto Sans JP を wx の部品 (プレビューウィンドウのテキスト表示・設定ダイアログ) でも
-    // 使えるようにこのプロセスに登録する
-    #[cfg(windows)]
-    fonts_win::register_embedded();
     // システムフォントの検索は数百 ms かかるので、最初のプレビューを待たせないよう先に別スレッドで済ませる
     std::thread::spawn(typball_core::warm_up);
     // コードの色付け用の構文定義の読み込みも同様
     std::thread::spawn(mdhtml::warm_up);
     let _ = wxdragon::main(move |_| {
+        // 同梱フォント (エディタの UDEV Gothic・プレビューの Noto Sans JP) を wx の部品から名前で使えるよう
+        // このプロセスに登録する。GTK は wx の初期化後でないと登録できないのでここで、ウィンドウを作る前に
+        fonts::register_embedded();
         i18n::set_language(&loaded.general.language);
         settings::set(loaded.clone());
         // Typst の既定フォント (文書が #set text(font:) で指定しないときに使う)
