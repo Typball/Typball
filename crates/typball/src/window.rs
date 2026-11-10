@@ -1078,8 +1078,23 @@ fn reload_tab(win: &WindowRef, tab: &Tab) {
     }
 }
 
+/// OS のファイルマネージャでフォルダを開く
+pub fn open_in_file_manager(dir: &Path) {
+    use std::process::Command;
+    let program = if cfg!(target_os = "windows") {
+        "explorer.exe"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    if let Err(e) = Command::new(program).arg(dir).spawn() {
+        eprintln!("Typball: could not open file manager: {e}");
+    }
+}
+
 /// OS のファイルマネージャでファイルの場所を開く
-fn reveal_in_file_manager(path: &Path) {
+pub fn reveal_in_file_manager(path: &Path) {
     use std::process::Command;
     let result = if cfg!(target_os = "windows") {
         Command::new("explorer.exe")

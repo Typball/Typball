@@ -318,10 +318,6 @@ pub enum SavedChanges {
     Clear,
 }
 
-impl SavedChanges {
-    pub const ALL: [SavedChanges; 2] = [Self::Keep, Self::Clear];
-}
-
 /// エディタ
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -335,9 +331,11 @@ pub struct Editor {
     pub wrap_column: i32,
     /// 行番号の位置 ("none" / "left" / "right" / "both")
     pub line_numbers: LineNumbers,
-    /// 開いてから編集した行を強調する (行番号を太字にし、端に帯を出す)
+    /// 開いてから編集した行を強調する (行番号を太字にし、端に帯を出す)。
+    /// ダイアログでは `saved_changes` と合わせて 1 つの選択肢 (変更行の強調) にしている
     pub highlight_changes: bool,
-    /// 保存したときの編集行の強調 ("keep" = 色を変えて残す / "clear" = 消す)
+    /// 保存したときの編集行の強調 ("keep" = 色を変えて残す / "clear" = 消す)。
+    /// 強調しないときも値は残す (メニューで強調を入れ直したときに戻る)
     pub saved_changes: SavedChanges,
     /// エディタ上部に文字位置のルーラーを表示する
     pub show_ruler: bool,

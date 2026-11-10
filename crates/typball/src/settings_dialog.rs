@@ -26,13 +26,15 @@ type Readers = Vec<Box<dyn Fn(&mut Settings)>>;
 type PageBuilder = fn(&Panel, &Settings, &mut Readers, &Dialog);
 
 /// ページの並び: (タイトルのキー, 中身を作る関数, 直前の親ページの子か)。
-/// 子ページは Treebook で親の下にぶら下がる (ファイル → Markdown / Typst の雛形)
-const PAGES: [(&str, PageBuilder, bool); 7] = [
+/// 子ページは Treebook で親の下にぶら下がる (ファイル → 形式ごとの設定)
+const PAGES: [(&str, PageBuilder, bool); 9] = [
     ("settings.general.title", page_general, false),
+    ("settings.display.title", page_display, false),
     ("settings.editor.title", page_editor, false),
     ("settings.files.title", page_files, false),
-    ("filetype.md", page_template_md, true),
-    ("filetype.typ", page_template_typ, true),
+    ("filetype.txt", page_filetype_txt, true),
+    ("filetype.md", page_filetype_md, true),
+    ("filetype.typ", page_filetype_typ, true),
     ("settings.preview.title", page_preview, false),
     ("settings.update.title", page_update, false),
 ];
@@ -109,13 +111,21 @@ pub fn show(parent: &Frame, current: &Settings) -> Option<Outcome> {
         }
     });
 
-    // 設定ファイルの場所 (移行時に探しやすいよう常に表示する)
+    // 設定ファイルの場所 (移行時に探しやすいよう常に表示する)。クリックでそのフォルダを開く
     let location = StaticText::builder(&dialog)
         .with_label(&tr_args(
             "settings.file_location",
             &[("path", &settings::path().display().to_string())],
         ))
         .build();
+    location.set_tooltip(&tr("settings.file_location_tip"));
+    if let Some(hand) = Cursor::from_stock(StockCursor::Hand) {
+        location.set_cursor(Some(&hand));
+    }
+    location.on_mouse_left_up(|event| {
+        open_settings_folder();
+        event.skip(true);
+    });
 
     let ok = Button::builder(&dialog)
         .with_id(ID_OK)
@@ -164,6 +174,24 @@ pub fn show(parent: &Frame, current: &Settings) -> Option<Outcome> {
     };
     dialog.destroy();
     out
+}
+
+/// 設定ファイルのあるフォルダをファイルマネージャで開く (ファイルがあれば選んだ状態で)。
+/// まだ一度も保存していなければフォルダを作ってから開く
+fn open_settings_folder() {
+    let path = settings::path();
+    if path.is_file() {
+        crate::window::reveal_in_file_manager(&path);
+        return;
+    }
+    let Some(dir) = path.parent() else {
+        return;
+    };
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        eprintln!("Typball: could not create {}: {e}", dir.display());
+        return;
+    }
+    crate::window::open_in_file_manager(dir);
 }
 
 /// ラベル + ウィジェットの 2 列グリッドを作る
@@ -252,16 +280,6 @@ fn page_general(panel: &Panel, current: &Settings, readers: &mut Readers, _dialo
     );
     grid.add(&choice, 0, SizerFlag::Expand, 0);
 
-    // ウィンドウ (メニュー・タブ・ダイアログ) の配色
-    add_theme_row(
-        panel,
-        &grid,
-        "settings.general.theme",
-        current.general.theme,
-        readers,
-        |s, v| s.general.theme = v,
-    );
-
     let note = StaticText::builder(panel)
         .with_label(&tr("settings.general.language_note"))
         .build();
@@ -284,28 +302,7 @@ fn page_general(panel: &Panel, current: &Settings, readers: &mut Readers, _dialo
     );
     grid.add(&last_tab, 0, SizerFlag::AlignLeft, 0);
 
-    // 下のペインの幅
-    let bottom_width = choice_with(
-        panel,
-        BottomWidth::ALL
-            .iter()
-            .map(|v| tr(bottom_width_key(*v)))
-            .collect(),
-    );
-    let selected = BottomWidth::ALL
-        .iter()
-        .position(|v| *v == current.panes.bottom_width)
-        .unwrap_or(0);
-    bottom_width.set_selection(selected as u32);
-    grid.add(
-        &label(panel, "settings.general.bottom_width"),
-        0,
-        LABEL_FLAGS,
-        0,
-    );
-    grid.add(&bottom_width, 0, SizerFlag::AlignLeft, 0);
-
-    // もう一度起動したとき (シングルインスタンス)
+    // 別に起動したとき (シングルインスタンス)
     let instance = choice_with(
         panel,
         InstanceMode::ALL
@@ -344,8 +341,6 @@ fn page_general(panel: &Panel, current: &Settings, readers: &mut Readers, _dialo
         };
         let idx = last_tab.get_selection().unwrap_or(0) as usize;
         s.general.last_tab = LastTab::ALL.get(idx).copied().unwrap_or_default();
-        let idx = bottom_width.get_selection().unwrap_or(0) as usize;
-        s.panes.bottom_width = BottomWidth::ALL.get(idx).copied().unwrap_or_default();
         let idx = instance.get_selection().unwrap_or(0) as usize;
         s.instance.mode = InstanceMode::ALL.get(idx).copied().unwrap_or_default();
     }));
@@ -365,10 +360,75 @@ fn last_tab_key(value: LastTab) -> &'static str {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 表示 (配色・ペインの配置)
+// ---------------------------------------------------------------------------
+
+fn page_display(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
+    let px = |v: i32| panel.from_dip_int(v);
+    let grid = form_grid(panel);
+
+    // ウィンドウ (メニュー・タブ・ダイアログ)・エディタ・プレビューの配色
+    add_theme_row(
+        panel,
+        &grid,
+        "settings.display.window_theme",
+        current.general.theme,
+        readers,
+        |s, v| s.general.theme = v,
+    );
+    add_theme_row(
+        panel,
+        &grid,
+        "settings.display.editor_theme",
+        current.editor.theme,
+        readers,
+        |s, v| s.editor.theme = v,
+    );
+    add_theme_row(
+        panel,
+        &grid,
+        "settings.display.preview_theme",
+        current.preview.theme,
+        readers,
+        |s, v| s.preview.theme = v,
+    );
+
+    // 下のペインの幅
+    let bottom_width = choice_with(
+        panel,
+        BottomWidth::ALL
+            .iter()
+            .map(|v| tr(bottom_width_key(*v)))
+            .collect(),
+    );
+    let selected = BottomWidth::ALL
+        .iter()
+        .position(|v| *v == current.panes.bottom_width)
+        .unwrap_or(0);
+    bottom_width.set_selection(selected as u32);
+    grid.add(
+        &label(panel, "settings.display.bottom_width"),
+        0,
+        LABEL_FLAGS,
+        0,
+    );
+    grid.add(&bottom_width, 0, SizerFlag::AlignLeft, 0);
+
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+    sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
+    panel.set_sizer(sizer, true);
+
+    readers.push(Box::new(move |s| {
+        let idx = bottom_width.get_selection().unwrap_or(0) as usize;
+        s.panes.bottom_width = BottomWidth::ALL.get(idx).copied().unwrap_or_default();
+    }));
+}
+
 fn bottom_width_key(value: BottomWidth) -> &'static str {
     match value {
-        BottomWidth::Editor => "settings.general.bottom_width_editor",
-        BottomWidth::Window => "settings.general.bottom_width_window",
+        BottomWidth::Editor => "settings.display.bottom_width_editor",
+        BottomWidth::Window => "settings.display.bottom_width_window",
     }
 }
 
@@ -379,14 +439,6 @@ fn bottom_width_key(value: BottomWidth) -> &'static str {
 fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
     let px = |v: i32| panel.from_dip_int(v);
     let grid = form_grid(panel);
-    add_theme_row(
-        panel,
-        &grid,
-        "settings.editor.theme",
-        current.editor.theme,
-        readers,
-        |s, v| s.editor.theme = v,
-    );
 
     // 同梱の UDEV Gothic (既定) を先頭に、続いて等幅フォント、残りを後に (どちらも名前順)。手入力もできる
     let embedded = crate::fonts::EDITOR_FONT_FAMILY;
@@ -498,31 +550,30 @@ fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog
     );
     grid.add(&line_numbers, 0, SizerFlag::AlignLeft, 0);
 
-    // 保存したときの編集行の強調: SavedChanges::ALL の並び順
-    let saved_changes = choice_with(
+    // 変更行の強調: 強調するか (highlight_changes) と保存したときの扱い (saved_changes) を
+    // 1 つの選択肢にまとめる。強調しないときは保存時の扱いを今の値のまま残す
+    // (メニューの「表示 → 編集した行を強調」で入れ直したときに元の扱いに戻るように)
+    let change_highlight = choice_with(
         panel,
-        SavedChanges::ALL
-            .iter()
-            .map(|v| tr(saved_changes_key(*v)))
-            .collect(),
+        CHANGE_HIGHLIGHT.iter().map(|(key, _)| tr(key)).collect(),
     );
-    let selected = SavedChanges::ALL
-        .iter()
-        .position(|v| *v == current.editor.saved_changes)
-        .unwrap_or(0);
-    saved_changes.set_selection(selected as u32);
+    let selected = if current.editor.highlight_changes {
+        CHANGE_HIGHLIGHT
+            .iter()
+            .position(|(_, v)| *v == Some(current.editor.saved_changes))
+            .unwrap_or(1)
+    } else {
+        0
+    };
+    change_highlight.set_selection(selected as u32);
     grid.add(
-        &label(panel, "settings.editor.saved_changes"),
+        &label(panel, "settings.editor.change_highlight"),
         0,
         LABEL_FLAGS,
         0,
     );
-    grid.add(&saved_changes, 0, SizerFlag::AlignLeft, 0);
+    grid.add(&change_highlight, 0, SizerFlag::AlignLeft, 0);
 
-    let highlight_changes = CheckBox::builder(panel)
-        .with_label(&tr("settings.editor.highlight_changes"))
-        .with_value(current.editor.highlight_changes)
-        .build();
     let show_ruler = CheckBox::builder(panel)
         .with_label(&tr("settings.editor.show_ruler"))
         .with_value(current.editor.show_ruler)
@@ -530,12 +581,6 @@ fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog
 
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
     sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
-    sizer.add(
-        &highlight_changes,
-        0,
-        SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
-        px(GAP),
-    );
     sizer.add(&show_ruler, 0, SizerFlag::Left | SizerFlag::Right, px(GAP));
     panel.set_sizer(sizer, true);
 
@@ -552,11 +597,14 @@ fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog
             .get_selection()
             .and_then(|i| LineNumbers::ALL.get(i as usize).copied())
             .unwrap_or_default();
-        s.editor.highlight_changes = highlight_changes.is_checked();
-        s.editor.saved_changes = saved_changes
-            .get_selection()
-            .and_then(|i| SavedChanges::ALL.get(i as usize).copied())
-            .unwrap_or_default();
+        let idx = change_highlight.get_selection().unwrap_or(1) as usize;
+        match CHANGE_HIGHLIGHT.get(idx).and_then(|(_, v)| *v) {
+            Some(saved) => {
+                s.editor.highlight_changes = true;
+                s.editor.saved_changes = saved;
+            }
+            None => s.editor.highlight_changes = false,
+        }
         s.editor.show_ruler = show_ruler.is_checked();
     }));
 }
@@ -569,12 +617,18 @@ fn wrap_key(value: Wrap) -> &'static str {
     }
 }
 
-fn saved_changes_key(value: SavedChanges) -> &'static str {
-    match value {
-        SavedChanges::Keep => "settings.editor.saved_changes_keep",
-        SavedChanges::Clear => "settings.editor.saved_changes_clear",
-    }
-}
+/// 「変更行の強調」の選択肢: (表示名のキー, 保存したときの扱い)。None は強調しない
+const CHANGE_HIGHLIGHT: [(&str, Option<SavedChanges>); 3] = [
+    ("settings.editor.change_highlight_off", None),
+    (
+        "settings.editor.change_highlight_keep",
+        Some(SavedChanges::Keep),
+    ),
+    (
+        "settings.editor.change_highlight_clear",
+        Some(SavedChanges::Clear),
+    ),
+];
 
 // ---------------------------------------------------------------------------
 // ファイル
@@ -630,118 +684,9 @@ fn page_files(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog:
         .with_value(current.files.untitled_numbering)
         .build();
 
-    // 種別ごとに開いたときのペインとバー
-    let note = StaticText::builder(panel)
-        .with_label(&tr("settings.files.panes_note"))
-        .build();
-    let panes_grid = FlexGridSizer::builder(0, 5)
-        .with_vgap(px(GAP / 2))
-        .with_hgap(px(GAP * 2))
-        .build();
-    let mut pane_boxes: Vec<(FileType, CheckBox, CheckBox, CheckBox, CheckBox)> = Vec::new();
-    for ft in FileType::ALL {
-        let panes = ft.panes(current);
-        let outline = CheckBox::builder(panel)
-            .with_label(&tr("settings.files.show_outline"))
-            .with_value(panes.show_outline && ft.has_outline())
-            .build();
-        let preview = CheckBox::builder(panel)
-            .with_label(&tr("settings.files.show_preview"))
-            .with_value(panes.show_preview && ft.has_preview())
-            .build();
-        let console = CheckBox::builder(panel)
-            .with_label(&tr("settings.files.show_console"))
-            .with_value(panes.show_console && ft.has_console())
-            .build();
-        let toolbar = CheckBox::builder(panel)
-            .with_label(&tr("settings.files.show_actionbar"))
-            .with_value(panes.show_actionbar && ft.has_actionbar())
-            .build();
-        outline.enable(ft.has_outline());
-        preview.enable(ft.has_preview());
-        console.enable(ft.has_console());
-        toolbar.enable(ft.has_actionbar());
-        panes_grid.add(&label(panel, ft.name_key()), 0, LABEL_FLAGS, 0);
-        panes_grid.add(&outline, 0, LABEL_FLAGS, 0);
-        panes_grid.add(&preview, 0, LABEL_FLAGS, 0);
-        panes_grid.add(&console, 0, LABEL_FLAGS, 0);
-        panes_grid.add(&toolbar, 0, LABEL_FLAGS, 0);
-        pane_boxes.push((ft, outline, preview, console, toolbar));
-    }
-
-    // スクロール同期 (方向ごと。同期できる形式だけ)
-    let sync_note = StaticText::builder(panel)
-        .with_label(&tr("settings.files.sync_note"))
-        .build();
-    let sync_grid = FlexGridSizer::builder(0, 3)
-        .with_vgap(px(GAP / 2))
-        .with_hgap(px(GAP * 2))
-        .build();
-    let mut sync_boxes: Vec<(FileType, CheckBox, CheckBox)> = Vec::new();
-    for ft in FileType::ALL.into_iter().filter(|ft| ft.has_scroll_sync()) {
-        let panes = ft.panes(current);
-        let to_preview = CheckBox::builder(panel)
-            .with_label(&tr("settings.files.sync_to_preview"))
-            .with_value(panes.sync_scroll_to_preview)
-            .build();
-        let to_editor = CheckBox::builder(panel)
-            .with_label(&tr("settings.files.sync_to_editor"))
-            .with_value(panes.sync_scroll_to_editor)
-            .build();
-        sync_grid.add(&label(panel, ft.name_key()), 0, LABEL_FLAGS, 0);
-        sync_grid.add(&to_preview, 0, LABEL_FLAGS, 0);
-        sync_grid.add(&to_editor, 0, LABEL_FLAGS, 0);
-        sync_boxes.push((ft, to_preview, to_editor));
-    }
-
-    // ファイルを渡されて起動したときの開き方 (プレビューのある形式だけ)
-    let open_note = StaticText::builder(panel)
-        .with_label(&tr("settings.files.open_note"))
-        .build();
-    let open_grid = FlexGridSizer::builder(0, 2)
-        .with_vgap(px(GAP / 2))
-        .with_hgap(px(GAP * 2))
-        .build();
-    let mut open_boxes: Vec<(FileType, CheckBox)> = Vec::new();
-    for ft in FileType::ALL.into_iter().filter(|ft| ft.has_preview()) {
-        let in_viewer = CheckBox::builder(panel)
-            .with_label(&tr("settings.files.open_in_viewer"))
-            .with_value(ft.open_mode(current) == OpenMode::Viewer)
-            .build();
-        open_grid.add(&label(panel, ft.name_key()), 0, LABEL_FLAGS, 0);
-        open_grid.add(&in_viewer, 0, LABEL_FLAGS, 0);
-        open_boxes.push((ft, in_viewer));
-    }
-
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
     sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
-    sizer.add(
-        &numbering,
-        0,
-        SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
-        px(GAP),
-    );
-    sizer.add(
-        &note,
-        0,
-        SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-        px(GAP),
-    );
-    sizer.add_sizer(&panes_grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
-    sizer.add(
-        &sync_note,
-        0,
-        SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-        px(GAP),
-    );
-    sizer.add_sizer(&sync_grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
-    sizer.add(
-        &open_note,
-        0,
-        SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-        px(GAP),
-    );
-    sizer.add_sizer(&open_grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
+    sizer.add(&numbering, 0, SizerFlag::Left | SizerFlag::Right, px(GAP));
     panel.set_sizer(sizer, true);
 
     readers.push(Box::new(move |s| {
@@ -755,58 +700,133 @@ fn page_files(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog:
             .and_then(|i| ExternalChange::ALL.get(i as usize).copied())
             .unwrap_or_default();
         s.files.untitled_numbering = numbering.is_checked();
-        for (ft, outline, preview, console, toolbar) in &pane_boxes {
-            // 開き方とペインの大きさは今の値から始める (開き方はチェックがある形式だけ変える)。
-            // 同期のチェックが無い形式は既定のまま
-            let sync = sync_boxes.iter().find(|(t, _, _)| t == ft);
-            let defaults = ft.default_panes();
-            let mut panes = PanesOverride::explicit(
-                Panes {
-                    show_outline: outline.is_checked(),
-                    show_preview: preview.is_checked(),
-                    show_console: console.is_checked(),
-                    show_actionbar: toolbar.is_checked(),
-                    sync_scroll_to_preview: sync
-                        .map(|(_, cb, _)| cb.is_checked())
-                        .unwrap_or(defaults.sync_scroll_to_preview),
-                    sync_scroll_to_editor: sync
-                        .map(|(_, _, cb)| cb.is_checked())
-                        .unwrap_or(defaults.sync_scroll_to_editor),
-                },
-                ft.overrides(s),
-            );
-            if let Some((_, cb)) = open_boxes.iter().find(|(t, _)| t == ft) {
-                panes.open_mode = if cb.is_checked() {
-                    OpenMode::Viewer
-                } else {
-                    OpenMode::Editor
-                };
-            }
-            match ft {
-                FileType::Txt => s.filetypes.txt = panes,
-                FileType::Md => s.filetypes.md = panes,
-                FileType::Typ => s.filetypes.typ = panes,
-            }
-        }
     }));
 }
 
 // ---------------------------------------------------------------------------
-// ファイル → Markdown / Typst: 新しいファイルの雛形
+// ファイル → テキスト / Markdown / Typst: 形式ごとのペイン・開き方・雛形
 // ---------------------------------------------------------------------------
 
-fn page_template_md(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
-    page_template(panel, current, readers, FileType::Md);
+fn page_filetype_txt(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
+    page_filetype(panel, current, readers, FileType::Txt);
 }
 
-fn page_template_typ(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
-    page_template(panel, current, readers, FileType::Typ);
+fn page_filetype_md(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
+    page_filetype(panel, current, readers, FileType::Md);
 }
 
-/// 形式ごとの雛形 (Ctrl+N と起動時の新規タブの中身)。複数行のテキストと「既定に戻す」
-fn page_template(panel: &Panel, current: &Settings, readers: &mut Readers, ft: FileType) {
+fn page_filetype_typ(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
+    page_filetype(panel, current, readers, FileType::Typ);
+}
+
+/// 形式ごとの設定: 開いたときのペインとバー、スクロール同期 (対応する形式だけ)、
+/// ファイルを渡されたときの開き方 (プレビューのある形式だけ)、新しいファイルの雛形
+fn page_filetype(panel: &Panel, current: &Settings, readers: &mut Readers, ft: FileType) {
     let px = |v: i32| panel.from_dip_int(v);
-    let note = StaticText::builder(panel)
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+    // チェックボックスを横に並べる行
+    let row = |boxes: &[&CheckBox]| {
+        let row = BoxSizer::builder(Orientation::Horizontal).build();
+        for (i, cb) in boxes.iter().enumerate() {
+            let gap = if i == 0 { 0 } else { px(GAP * 2) };
+            row.add(*cb, 0, SizerFlag::Left | LABEL_FLAGS, gap);
+        }
+        row
+    };
+    let check = |key: &str, value: bool, enabled: bool| {
+        let cb = CheckBox::builder(panel)
+            .with_label(&tr(key))
+            .with_value(value && enabled)
+            .build();
+        cb.enable(enabled);
+        cb
+    };
+
+    // 開いたときのペインとバー (この形式に無いものは選べない)
+    let panes = ft.panes(current);
+    let outline = check(
+        "settings.files.show_outline",
+        panes.show_outline,
+        ft.has_outline(),
+    );
+    let preview = check(
+        "settings.files.show_preview",
+        panes.show_preview,
+        ft.has_preview(),
+    );
+    let console = check(
+        "settings.files.show_console",
+        panes.show_console,
+        ft.has_console(),
+    );
+    let toolbar = check(
+        "settings.files.show_actionbar",
+        panes.show_actionbar,
+        ft.has_actionbar(),
+    );
+    let panes_note = StaticText::builder(panel)
+        .with_label(&tr("settings.files.panes_note"))
+        .build();
+    sizer.add(
+        &panes_note,
+        0,
+        SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
+        px(GAP),
+    );
+    sizer.add_sizer(
+        &row(&[&outline, &preview, &console, &toolbar]),
+        0,
+        SizerFlag::All,
+        px(GAP),
+    );
+
+    // スクロール同期 (方向ごと)
+    let sync = ft.has_scroll_sync().then(|| {
+        let to_preview = check(
+            "settings.files.sync_to_preview",
+            panes.sync_scroll_to_preview,
+            true,
+        );
+        let to_editor = check(
+            "settings.files.sync_to_editor",
+            panes.sync_scroll_to_editor,
+            true,
+        );
+        let note = StaticText::builder(panel)
+            .with_label(&tr("settings.files.sync_note"))
+            .build();
+        sizer.add(
+            &note,
+            0,
+            SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
+            px(GAP),
+        );
+        sizer.add_sizer(&row(&[&to_preview, &to_editor]), 0, SizerFlag::All, px(GAP));
+        (to_preview, to_editor)
+    });
+
+    // ファイルを渡されて起動したときの開き方
+    let in_viewer = ft.has_preview().then(|| {
+        let in_viewer = check(
+            "settings.files.open_in_viewer",
+            ft.open_mode(current) == OpenMode::Viewer,
+            true,
+        );
+        let note = StaticText::builder(panel)
+            .with_label(&tr("settings.files.open_note"))
+            .build();
+        sizer.add(
+            &note,
+            0,
+            SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
+            px(GAP),
+        );
+        sizer.add(&in_viewer, 0, SizerFlag::All, px(GAP));
+        in_viewer
+    });
+
+    // 新しいファイルの雛形 (Ctrl+N と起動時の新規タブの中身)。複数行のテキストと「既定に戻す」
+    let template_note = StaticText::builder(panel)
         .with_label(&tr_args(
             "settings.files.template_note",
             &[("name", &tr(ft.name_key()))],
@@ -827,9 +847,12 @@ fn page_template(panel: &Panel, current: &Settings, readers: &mut Readers, ft: F
         .with_label(&tr("settings.files.template_reset"))
         .build();
     reset.on_click(move |_| text.set_value(&ft.default_template()));
-
-    let sizer = BoxSizer::builder(Orientation::Vertical).build();
-    sizer.add(&note, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
+    sizer.add(
+        &template_note,
+        0,
+        SizerFlag::Expand | SizerFlag::All,
+        px(GAP),
+    );
     sizer.add(
         &text,
         1,
@@ -840,9 +863,36 @@ fn page_template(panel: &Panel, current: &Settings, readers: &mut Readers, ft: F
     panel.set_sizer(sizer, true);
 
     readers.push(Box::new(move |s| {
+        // 開き方・ペインの大きさは今の値から始める。このページに無い項目 (同期できない形式の同期) も今の値のまま
+        let now = ft.panes(s);
+        let mut panes = PanesOverride::explicit(
+            Panes {
+                show_outline: outline.is_checked(),
+                show_preview: preview.is_checked(),
+                show_console: console.is_checked(),
+                show_actionbar: toolbar.is_checked(),
+                sync_scroll_to_preview: sync
+                    .as_ref()
+                    .map(|(cb, _)| cb.is_checked())
+                    .unwrap_or(now.sync_scroll_to_preview),
+                sync_scroll_to_editor: sync
+                    .as_ref()
+                    .map(|(_, cb)| cb.is_checked())
+                    .unwrap_or(now.sync_scroll_to_editor),
+            },
+            ft.overrides(s),
+        );
+        if let Some(cb) = &in_viewer {
+            panes.open_mode = if cb.is_checked() {
+                OpenMode::Viewer
+            } else {
+                OpenMode::Editor
+            };
+        }
         let value = text.get_value();
         // 既定のままなら書き出さない (表示言語を変えたときに既定も切り替わるように)
-        ft.overrides_mut(s).template = (value != ft.default_template()).then_some(value);
+        panes.template = (value != ft.default_template()).then_some(value);
+        *ft.overrides_mut(s) = panes;
     }));
 }
 
@@ -853,14 +903,6 @@ fn page_template(panel: &Panel, current: &Settings, readers: &mut Readers, ft: F
 fn page_preview(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
     let px = |v: i32| panel.from_dip_int(v);
     let grid = form_grid(panel);
-    add_theme_row(
-        panel,
-        &grid,
-        "settings.preview.theme",
-        current.preview.theme,
-        readers,
-        |s, v| s.preview.theme = v,
-    );
 
     // プレビューのフォント (Typst の既定・Markdown の本文・プレビューウィンドウ)。同梱の Noto Sans JP を先頭に
     let embedded = typball_core::EMBEDDED_FONT_FAMILY;
