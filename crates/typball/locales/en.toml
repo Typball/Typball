@@ -1,0 +1,357 @@
+# Typball UI strings (English). This is the fallback: any key missing from
+# another language falls back to the value here, so keep it complete.
+# The character after "&" is the menu access key; text after "\t" is the shortcut.
+# "{name}" placeholders are substituted by the program.
+
+[meta]
+native_name = "English"
+
+[menu]
+file = "&File"
+new = "&New\tCtrl+N"
+new_as = "Ne&w As"
+open = "&Open...\tCtrl+O"
+save = "&Save\tCtrl+S"
+save_as = "Save &As...\tCtrl+Shift+S"
+close_tab = "&Close Tab\tCtrl+W"
+open_viewer = "Open in Preview &Window"
+new_window = "New W&indow\tCtrl+Shift+N"
+move_tab = "&Move Tab to New Window"
+exit = "E&xit"
+edit = "&Edit"
+undo = "&Undo	Ctrl+Z"
+redo = "&Redo	Ctrl+Y"
+cut = "Cu&t	Ctrl+X"
+copy = "&Copy	Ctrl+C"
+paste = "&Paste	Ctrl+V"
+delete = "&Delete"
+select_all = "Select &All	Ctrl+A"
+search = "&Search"
+find = "&Find...	Ctrl+F"
+find_next = "Find &Next	F3"
+find_prev = "Find &Previous	Shift+F3"
+replace = "&Replace...	Ctrl+H"
+goto_line = "&Go to Line...	Ctrl+G"
+view = "&View"
+wrap_none = "&No Wrap\tCtrl+1"
+wrap_column = "Wrap at &Column\tCtrl+2"
+wrap_window = "Wrap at &Window Edge\tCtrl+3"
+line_numbers = "&Line Numbers"
+line_numbers_none = "&Hidden"
+line_numbers_left = "&Left"
+line_numbers_right = "&Right"
+line_numbers_both = "&Both Sides"
+view_ruler = "&Ruler"
+view_changes = "&Highlight Edited Lines"
+clear_changes = "Cl&ear Edited-Line Highlights"
+clear_saved = "Clear &Saved-Line Highlights"
+view_outline = "&Outline\tCtrl+Shift+L"
+view_preview = "&Preview\tCtrl+Shift+P"
+view_console = "&Console\tCtrl+Shift+K"
+actions = "&Actions"
+no_actions = "No actions for this file type"
+tools = "&Tools"
+preferences = "&Preferences..."
+help = "&Help"
+check_update = "Check for &Updates..."
+about = "&About"
+
+[menu.help_text]
+new = "Open a new tab in the default format"
+open = "Open a file"
+save = "Save the file"
+save_as = "Save the file under a new name"
+close_tab = "Close this tab"
+open_viewer = "Open this file in a preview-only window without the editor (same as Typball.exe --view)"
+new_window = "Open a new window"
+move_tab = "Move this tab to a new window"
+exit = "Quit Typball"
+preferences = "Change Typball settings"
+about = "Show version information"
+check_update = "Check GitHub for a newer release"
+view_console = "Show Typst diagnostics, Markdown conversion results and dev server output"
+find = "Show the find bar above the editor"
+replace = "Show the find bar with replace"
+goto_line = "Jump to a line number"
+clear_changes = "Remove the edited-line highlights (unsaved and saved) in this tab"
+clear_saved = "Remove only the saved-line highlights in this tab"
+
+[filetype]
+txt = "Text (.txt)"
+md = "Markdown (.md)"
+typ = "Typst (.typ)"
+
+# Short names for the status bar
+[filetype.short]
+txt = "Text"
+md = "Markdown"
+typ = "Typst"
+
+[document]
+# Name of a new document. With numbering enabled it becomes "Untitled-1.txt"
+untitled = "Untitled"
+
+[template]
+# Template for new files (Ctrl+N and the tab opened at startup). Override with [filetypes.*] template
+md = ""
+typ = "#set page(paper: \"a4\")\n#set text(font: \"Noto Sans JP\", lang: \"en\", size: 11pt)\n\n= New document\n\n"
+
+[pane]
+outline = "Outline"
+preview = "Preview"
+console = "Console"
+float = "Detach into a separate window"
+dock = "Return to the main window"
+collapse = "Collapse (click the bar at the edge to restore)"
+menu = "Placement"
+position_left = "Show on the &left"
+position_right = "Show on the &right"
+position_bottom = "Show at the &bottom"
+hide = "&Hide"
+# Drop target shown while dragging a pane header
+drop_left = "Show on the left"
+drop_right = "Show on the right"
+drop_bottom = "Show at the bottom"
+drop_same = "Current place"
+drop_below = "Place below \"{name}\""
+drop_right_of = "Place right of \"{name}\""
+# Only in the menu of a pane placed at the bottom
+bottom_wide = "Span the &Window Width"
+
+[dnd]
+# Text shown next to the pointer while files are dragged over the window
+open = "Open in Typball"
+
+[action]
+# Items of the Actions menu (.menu) and tooltips of the action bar (.tip)
+export_pdf.menu = "&Export PDF...\tCtrl+E"
+export_pdf.tip = "Export the Typst document as PDF"
+bold.menu = "&Bold\tCtrl+B"
+bold.tip = "Bold"
+italic.menu = "&Italic\tCtrl+I"
+italic.tip = "Italic"
+heading.menu = "&Heading"
+heading.tip = "Heading (press again to lower the level)"
+code.menu = "&Code"
+code.tip = "Code"
+link.menu = "&Link"
+link.tip = "Link"
+list.menu = "B&ulleted list"
+list.tip = "Bulleted list"
+quote.menu = "&Quote"
+quote.tip = "Quote"
+math.menu = "&Math"
+math.tip = "Math"
+
+[dialog]
+open_title = "Open"
+save_title = "Save As"
+export_pdf_title = "Export PDF"
+save_changes = "Save changes to {name}?"
+reload = "{name} was changed by another program. Reload it?"
+reload_modified = "{name} was changed by another program. This tab has unsaved changes that will be lost. Reload it?"
+reload_confirm = "Reload {name} from disk? Unsaved changes will be lost."
+open_error = "Could not open {path}: {error}"
+save_error = "Could not save {path}: {error}"
+export_error = "Could not export PDF: {error}"
+
+[status]
+ok = "OK"
+position = "Ln {line}, Col {col}"
+chars = "{n} chars"
+encoding = "UTF-8 (no BOM)"
+saved = "Saved: {path}"
+exported_pdf = "PDF exported: {path}"
+reloaded = "Reloaded {name}"
+external_changed = "{name} was changed externally (not reloaded)"
+external_deleted = "{name} was deleted or moved externally"
+settings_load_error = "Could not read the settings file, using defaults: {error}"
+settings_save_error = "Could not save the settings file: {error}"
+
+[about]
+description = "A tabbed Typst editor with live preview"
+copyright = "(C) 2026 Typball contributors"
+website = "GitHub repository"
+# Shown after Typball's LICENSE in the About box. The full texts are in THIRD-PARTY-NOTICES.txt
+third_party = """
+Bundled fonts and software:
+- Noto Sans JP — SIL Open Font License 1.1
+- Fonts bundled with Typst
+    Libertinus Serif — SIL Open Font License 1.1
+    New Computer Modern — GUST Font License 1.0
+        (NewCM10-Regular: GPL-3.0-or-later with Font Exception)
+    DejaVu Sans Mono — Bitstream Vera Fonts License
+    PDF standard fonts (Foxit) — BSD-3-Clause
+- Typst — Apache License 2.0
+- wxWidgets — wxWindows Library Licence 3.1
+- Libraries built into wxWidgets
+    Scintilla / Lexilla — Scintilla License
+    libpng — PNG Reference Library License v2
+    zlib, NanoSVG — zlib License
+    libjpeg — IJG License
+    libtiff — libtiff License
+    Expat — MIT
+    PCRE2 — BSD-3-Clause
+    Microsoft Edge WebView2 SDK — BSD-3-Clause
+- Rust libraries (about 380) — MIT, Apache-2.0 and their other licenses
+
+This software is based in part on the work of the Independent JPEG Group.
+
+The full license texts and the list of Rust libraries are in
+THIRD-PARTY-NOTICES.txt, which ships with Typball."""
+
+[settings]
+title = "Preferences"
+file_location = "Settings file: {path}"
+ok = "OK"
+cancel = "Cancel"
+
+[settings.general]
+title = "General"
+language = "Language:"
+language_system = "Follow system language"
+language_note = "The menu updates immediately. Dialogs switch the next time they are opened."
+last_tab = "When the last tab is closed:"
+last_tab_keep = "Keep an empty tab open"
+last_tab_close = "Close the window (quit if it is the last one)"
+bottom_width = "Bottom pane width:"
+bottom_width_editor = "Editor width (side panes extend to the bottom)"
+bottom_width_window = "Window width (spans under the side panes)"
+instance = "When Typball is started again:"
+instance_single = "Open the files in the running Typball (--new-instance starts another)"
+instance_multiple = "Start another Typball (tabs move only within one process)"
+
+[settings.editor]
+title = "Editor"
+font_face = "Font:"
+font_size = "Font size (pt):"
+tab_width = "Tab width:"
+wrap = "Wrap:"
+wrap_none = "No wrap"
+wrap_window = "At the window edge"
+wrap_column = "At a column"
+wrap_column_width = "Wrap column:"
+line_numbers = "Line numbers:"
+line_numbers_none = "Hidden"
+line_numbers_left = "Left"
+line_numbers_right = "Right"
+line_numbers_both = "Both sides"
+highlight_changes = "Highlight edited lines"
+saved_changes = "When saved:"
+saved_changes_keep = "Keep the highlight in another color"
+saved_changes_clear = "Clear the highlight"
+show_ruler = "Show ruler"
+
+[settings.files]
+title = "Files"
+default_filetype = "Format of new tabs:"
+external_change = "When a file changes on disk:"
+external_change_ask = "Ask"
+external_change_reload = "Reload automatically (ask if there are unsaved changes)"
+external_change_ignore = "Do not reload"
+untitled_numbering = "Number new documents (Untitled-1.txt)"
+panes_note = "Panes and bars shown for each format (also applied to open tabs):"
+show_outline = "Outline"
+show_preview = "Preview"
+show_console = "Console"
+show_actionbar = "Action bar"
+sync_note = "Scroll sync (Markdown preview; aligned at the top near the start and at the bottom near the end):"
+sync_to_preview = "Editor \u2192 preview"
+sync_to_editor = "Preview \u2192 editor"
+open_note = "How files are opened when passed by double-click or on the command line\n(--edit / --view take precedence; the preview window's Edit button switches to the editor):"
+open_in_viewer = "Open in the preview window"
+template_note = "Template for new {name} files (Ctrl+N and the tab opened at startup):"
+template_reset = "&Reset to Default"
+
+[find]
+label = "Find:"
+replace_label = "Replace:"
+next = "&Next"
+prev = "&Previous"
+replace_one = "&Replace"
+replace_all = "Replace &All"
+match_case = "Match case"
+whole_word = "Whole word"
+regex = "Regular expression"
+close_tip = "Close (Esc)"
+not_found = "Not found"
+replaced = "Replaced {n} occurrence(s)"
+goto_title = "Go to Line"
+goto_prompt = "Line number (1 - {max}):"
+
+[viewer]
+title = "Preview"
+edit = "&Edit"
+edit_tip = "Open this file in the editor (closes this window)"
+
+[console]
+hint = "Compiler / converter output appears here. Double-click a line with line:column to jump there."
+typst_ok = "Typst: OK ({pages} pages, {ms} ms)"
+typst_warnings = "Typst: OK with warnings ({pages} pages, {ms} ms)"
+typst_failed = "Typst: errors ({ms} ms)"
+markdown = "Markdown → HTML: {lines} lines, {chars} chars ({ms} ms)"
+site_server = "Dev server: {url}"
+
+[tabmenu]
+close = "&Close"
+close_others = "Close &Others"
+close_all = "Close &All"
+save = "&Save"
+save_as = "Save As (&N)..."
+reload = "&Reload from Disk"
+move_to_window = "&Move to New Window"
+open_folder = "Open Containing &Folder"
+copy_path = "Copy &Path"
+
+[preview]
+# Mode bar of the Markdown preview (WebView)
+mode_markdown = "Markdown"
+mode_site = "Site (dev server)"
+site_hint = "Updates when you save"
+site_starting = "Starting the dev server..."
+site_error = "Could not start the dev server: {error}"
+site_timeout = "The dev server is not responding"
+webview_missing = "The HTML preview needs the Microsoft Edge WebView2 Runtime, which was not found. Please install it."
+
+[update]
+# Update check (Help > Check for Updates, and the automatic check at startup)
+title = "Typball Update"
+checking = "Checking for updates..."
+up_to_date = "Typball v{version} is up to date."
+no_release = "No release has been published yet (you are running v{version})."
+check_failed = "Could not check for updates: {error}"
+available = "Version v{new} is available (you are running v{current})."
+available_nightly = "A newer development build ({new}) is available (you are running v{current}). Development builds contain untested changes."
+no_notes = "(no release notes)"
+open_releases = "Open the Releases page"
+install = "&Update and restart"
+skip = "&Skip this version"
+later = "&Later"
+downloading_title = "Downloading the update"
+downloading = "Downloading: {done} / {total} MB"
+failed = "Could not download the update: {error}"
+apply_failed = "Could not apply the update: {error}\n\nPlease replace it manually from the Releases page: {url}"
+restarting = "Applying the update and restarting Typball..."
+cancelled = "Update cancelled"
+
+[settings.preview]
+title = "Preview"
+font_face = "Font:"
+font_size = "Font size (pt):"
+font_note = "Used as the Typst default when a document does not set #set text(font:), for the Markdown preview body, and for text shown in the preview window. The bundled Noto Sans JP works without installing it. The editor font is set separately on the Editor page."
+markdown_mode = "Markdown preview:"
+markdown_mode_auto = "Automatic (site mode inside a site project)"
+markdown_mode_markdown = "Render Markdown as HTML"
+markdown_mode_site = "Show the site's dev server"
+site_command = "Dev server command:"
+site_url = "URL to show:"
+site_note = "{port} becomes a free port and {root} the project folder (where hugo.toml lives). The default command's navigateToChanged makes the preview follow the page you save."
+
+[settings.update]
+title = "Updates"
+check_on_startup = "Check for a newer release at startup"
+channel = "Update channel:"
+channel_stable = "Stable (numbered releases only)"
+channel_nightly = "Include development builds (latest build per push, nightly)"
+interval = "Check interval (hours):"
+note = "Looks at the GitHub Releases page ({url}). Nothing happens when the network is unavailable. Use Help > Check for Updates to check manually. Development builds contain untested changes. You are running v{version}."

@@ -1,0 +1,10 @@
+// Typball のアイコン (build.rs が embed-resource で exe に埋め込む)
+//
+// ID 1 がアプリのアイコン。エクスプローラーは ID の一番小さいアイコンを exe のアイコンにする。
+// 関連付けアイコンはインストーラーが "Typball.exe,-101" のように負の ID (= リソース ID) で参照する。
+// 画像は design/icons/export_icons.py で作る
+
+1   ICON "Typball.ico"
+101 ICON "doc-typ.ico"
+102 ICON "doc-md.ico"
+103 ICON "doc-txt.ico"

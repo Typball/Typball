@@ -1,0 +1,202 @@
+# プッシュ / Pull Request ごとに各 OS でビルドする。
+# 既定ブランチへの push では、その成果物で固定タグ `nightly` の pre-release を作り直す
+# (アプリの更新チャネル「開発版」が見に行く場所)
+name: CI
+
+on:
+  push:
+    branches: ["**"]   # branches だけ指定しているのでタグの push では動かない (v* タグは release.yml が担当)
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  build:
+    name: build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            os: windows-latest
+          - name: linux-x86_64
+            os: ubuntu-22.04
+          - name: macos-aarch64
+            os: macos-latest
+    outputs:
+      # nightly の表記と識別子 (全 OS で同じ値になる)
+      label: ${{ steps.meta.outputs.label }}
+      commit_time: ${{ steps.meta.outputs.commit_time }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # nightly の識別子はビルド元のコミット日時 (UNIX 秒) と短い SHA。番号は使わない (update.rs)。
+      # build.rs がこれを埋め込み、アプリは nightly Release の本文の build-time と比べて新旧を判断する。
+      # app_version はインストーラーと .app の表示用 (0.1.0-nightly.202611101200.abc1234)
+      - name: Build id
+        id: meta
+        shell: bash
+        run: |
+          version=$(grep -m1 -E '^version\s*=' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          commit_time=$(git log -1 --format=%ct)
+          sha=$(git rev-parse --short=7 HEAD)
+          stamp=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M)
+          human=$(TZ=UTC git log -1 --format=%cd --date=format-local:'%Y-%m-%d %H:%M')
+          echo "TYPBALL_BUILD_KIND=nightly" >> "$GITHUB_ENV"
+          echo "TYPBALL_COMMIT_TIME=${commit_time}" >> "$GITHUB_ENV"
+          echo "TYPBALL_COMMIT=${sha}" >> "$GITHUB_ENV"
+          echo "label=nightly ${human} UTC, ${sha}" >> "$GITHUB_OUTPUT"
+          echo "commit_time=${commit_time}" >> "$GITHUB_OUTPUT"
+          echo "app_version=${version}-nightly.${stamp}.${sha}" >> "$GITHUB_OUTPUT"
+          echo "nightly ${human} UTC, ${sha} (${version}-nightly.${stamp}.${sha})"
+
+      - name: Install Linux dependencies (GTK3 など wxWidgets のビルドに必要)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libclang-dev \
+            libgtk-3-dev libpng-dev libjpeg-dev libtiff-dev libexpat1-dev zlib1g-dev \
+            libgl1-mesa-dev libglu1-mesa-dev libxkbcommon-dev libwayland-dev \
+            libxtst-dev libsm-dev libice-dev libnotify-dev \
+            libwebkit2gtk-4.1-dev libsoup-3.0-dev
+
+      # Windows は MinGW-w64 (GNU ツールチェーン) でビルドする。
+      # ローカルの build.cmd と同じコンパイラにするため、Code::Blocks 25.03 が同梱している
+      # WinLibs のリリース (gcc 14.2.0 / LLVM 19.1.7 / mingw-w64 12.0.0 UCRT r3) をそのまま使う。
+      - name: Install MinGW-w64 (WinLibs, same build as Code::Blocks 25.03)
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/setup-mingw
+
+      - name: Install Rust (Linux / macOS)
+        if: runner.os != 'Windows'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust (Windows, GNU toolchain)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal --no-self-update
+          Add-Content $env:GITHUB_ENV "RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu"
+
+      # wxWidgets のビルド成果物 (target/ 配下の OUT_DIR) も含めてキャッシュする
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Smoke test (typball-core)
+        run: cargo run --release --locked -p typball-core --example smoke
+
+      # 以下、nightly 用の配布物。名前は typball-nightly-<os> で固定 (update.rs の package_name と合わせる)
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path target/release/Typball.exe, README.md, LICENSE, THIRD-PARTY-NOTICES.txt `
+            -DestinationPath "dist/typball-nightly-${{ matrix.name }}.zip"
+
+      # インストーラー (Inno Setup はランナーに同梱)。release より前にスクリプトの誤りに気づくためにも毎回組む
+      - name: Package (Windows installer)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=${{ steps.meta.outputs.app_version }}" `
+            "/DOutputName=typball-nightly-${{ matrix.name }}-setup" installer\typball.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem dist
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist stage
+          cp target/release/Typball README.md LICENSE THIRD-PARTY-NOTICES.txt stage/
+          tar -C stage -czf "dist/typball-nightly-${{ matrix.name }}.tar.gz" .
+
+      - name: Package (macOS .app)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist "stage/Typball.app/Contents/MacOS" "stage/Typball.app/Contents/Resources"
+          cp target/release/Typball "stage/Typball.app/Contents/MacOS/Typball"
+          cp crates/typball/assets/icons/Typball.icns "stage/Typball.app/Contents/Resources/Typball.icns"
+          cat > "stage/Typball.app/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleName</key><string>Typball</string>
+            <key>CFBundleDisplayName</key><string>Typball</string>
+            <key>CFBundleIdentifier</key><string>io.github.typball.typball</string>
+            <key>CFBundleVersion</key><string>${{ steps.meta.outputs.app_version }}</string>
+            <key>CFBundleShortVersionString</key><string>${{ steps.meta.outputs.app_version }}</string>
+            <key>CFBundleExecutable</key><string>Typball</string>
+            <key>CFBundleIconFile</key><string>Typball</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict></plist>
+          PLIST
+          cp README.md LICENSE THIRD-PARTY-NOTICES.txt stage/
+          tar -C stage -czf "dist/typball-nightly-${{ matrix.name }}.tar.gz" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: typball-${{ matrix.name }}-${{ github.sha }}
+          path: dist/*
+          retention-days: 7
+
+  # 既定ブランチへの push だけ: 固定タグ nightly の pre-release を消して作り直す。
+  # 作り直す (添付の差し替えではなく) のは、公開日時とタグの指すコミットを新しくするため
+  nightly:
+    name: nightly の pre-release を作り直す
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    needs: [fmt, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: nightly-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      # アプリの自動更新がダウンロード後に照合するハッシュ一覧
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      # 本文の先頭 2 行 (build-time / commit) はアプリが新旧の判定に読む (update.rs の parse_release)
+      - name: Recreate the nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABEL: ${{ needs.build.outputs.label }}
+          COMMIT_TIME: ${{ needs.build.outputs.commit_time }}
+        run: |
+          gh release delete nightly --cleanup-tag --yes || true
+          notes="build-time: ${COMMIT_TIME}
+          commit: ${GITHUB_SHA}
+
+          既定ブランチへの push ごとに作り直される開発版 (テストされていない変更を含みます)。
+          安定版は https://github.com/${GITHUB_REPOSITORY}/releases/latest をご覧ください。
+          Typball の設定 → 更新 → 更新チャネルを「開発版も含める」にすると、この版へ自動で更新されます。"
+          gh release create nightly dist/* --prerelease --target "$GITHUB_SHA" \
+            --title "Typball ${LABEL}" --notes "$notes"

@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = ["crates/typball-core", "crates/typball"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/Typball/Typball"
+
+[workspace.dependencies]
+typball-core = { path = "crates/typball-core" }
+
+[profile.release]
+opt-level = 3
+codegen-units = 16
+debug = false
+strip = true
+
+[patch.crates-io]
+# wxdragon-sys の vendored コピー。build.rs に 1 か所だけ手を入れている ("Typball patch" で検索):
+# 環境変数 WXDRAGON_WEBVIEW_EDGE_STATIC で wxUSE_WEBVIEW_EDGE_STATIC を CMake に渡す
+wxdragon-sys = { path = "vendor/wxdragon-sys" }

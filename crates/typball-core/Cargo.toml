@@ -1,0 +1,16 @@
+[package]
+name = "typball-core"
+description = "Typball のコア: Typst ソースをコンパイルしてページ画像 / PDF を得る"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+typst = "0.15"
+typst-render = "0.15"
+typst-kit = { version = "0.15", default-features = false, features = ["scan-fonts", "embedded-fonts"] }
+typst-pdf = "0.15"
+typst-layout = "0.15"
+comemo = "0.5"
+parking_lot = "0.12"

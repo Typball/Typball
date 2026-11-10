@@ -1,0 +1,18 @@
+# ビルド成果物
+/target/
+/dist/
+
+# 生成スクリプトのキャッシュ
+__pycache__/
+*.py[cod]
+
+# rustfmt のバックアップ
+**/*.rs.bk
+
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# vendor/ は無視しない: vendor/wxdragon-sys は [patch.crates-io] でビルドに使うクレートの全体 (vendor/README.md)
+

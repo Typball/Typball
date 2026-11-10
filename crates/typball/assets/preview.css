@@ -1,0 +1,147 @@
+/* Markdown プレビューの見た目 (GitHub 風)。ライト / ダークは OS の設定に従う */
+:root {
+  color-scheme: light dark;
+  --fg: #1f2328;
+  --fg-muted: #59636e;
+  --bg: #ffffff;
+  --bg-subtle: #f6f8fa;
+  --border: #d1d9e0;
+  --link: #0969da;
+  --code-bg: #f6f8fa;
+  --mark-bg: #fff8c5;
+  --alert-note: #0969da;
+  --alert-tip: #1a7f37;
+  --alert-important: #8250df;
+  --alert-warning: #9a6700;
+  --alert-caution: #cf222e;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #e6edf3;
+    --fg-muted: #9198a1;
+    --bg: #0d1117;
+    --bg-subtle: #161b22;
+    --border: #3d444d;
+    --link: #4493f8;
+    --code-bg: #161b22;
+    --mark-bg: #3a2d00;
+    --alert-note: #4493f8;
+    --alert-tip: #3fb950;
+    --alert-important: #ab7df8;
+    --alert-warning: #d29922;
+    --alert-caution: #f85149;
+  }
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+body {
+  font-family: -apple-system, "Segoe UI", "Yu Gothic UI", "Meiryo", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  font-size: 15px;
+  line-height: 1.7;
+  word-wrap: break-word;
+}
+.markdown-body {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 20px 28px 60vh;
+}
+/* スクロール同期用の印 (幅 0 で位置だけ持つ) */
+.tb-mark { display: inline-block; width: 0; height: 0; overflow: hidden; }
+.tb-block { position: relative; }
+
+h1, h2, h3, h4, h5, h6 {
+  margin: 1.4em 0 0.6em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+h1 { font-size: 1.9em; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
+h2 { font-size: 1.5em; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
+h3 { font-size: 1.25em; }
+h4 { font-size: 1.05em; }
+h5, h6 { font-size: 0.95em; color: var(--fg-muted); }
+.tb-title { margin-top: 0.4em; }
+p, ul, ol, dl, table, pre, blockquote { margin: 0 0 1em; }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; height: auto; box-sizing: border-box; }
+hr { height: 1px; border: 0; background: var(--border); margin: 1.6em 0; }
+ul, ol { padding-left: 2em; }
+li + li { margin-top: 0.2em; }
+li > p { margin-bottom: 0.4em; }
+input[type="checkbox"] { margin: 0 0.4em 0.2em -1.4em; vertical-align: middle; }
+li:has(> input[type="checkbox"]) { list-style: none; }
+dl dt { font-weight: 600; margin-top: 0.6em; }
+dl dd { margin-left: 1.5em; }
+
+code, pre, .math { font-family: ui-monospace, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "BIZ UDGothic", monospace; }
+code { font-size: 0.9em; background: var(--code-bg); border-radius: 4px; padding: 0.15em 0.35em; }
+pre { background: var(--code-bg); border-radius: 6px; padding: 12px 14px; overflow: auto; line-height: 1.5; }
+pre code { background: none; padding: 0; font-size: 0.88em; }
+pre.tb-code { border: 1px solid var(--border); }
+
+blockquote {
+  border-left: 4px solid var(--border);
+  color: var(--fg-muted);
+  padding: 0.2em 1em;
+}
+blockquote > :last-child { margin-bottom: 0; }
+
+/* GFM のアラート (> [!NOTE] など)。pulldown-cmark は class を付けるだけなので見出しは CSS で出す */
+blockquote[class^="markdown-alert"] { color: var(--fg); }
+blockquote[class^="markdown-alert"]::before { display: block; font-weight: 600; margin-bottom: 0.3em; }
+.markdown-alert-note::before { content: "Note"; color: var(--alert-note); }
+.markdown-alert-tip::before { content: "Tip"; color: var(--alert-tip); }
+.markdown-alert-important::before { content: "Important"; color: var(--alert-important); }
+.markdown-alert-warning::before { content: "Warning"; color: var(--alert-warning); }
+.markdown-alert-caution::before { content: "Caution"; color: var(--alert-caution); }
+.markdown-alert-title { font-weight: 600; margin-bottom: 0.3em; }
+.markdown-alert-note { border-left-color: var(--alert-note); }
+.markdown-alert-note .markdown-alert-title { color: var(--alert-note); }
+.markdown-alert-tip { border-left-color: var(--alert-tip); }
+.markdown-alert-tip .markdown-alert-title { color: var(--alert-tip); }
+.markdown-alert-important { border-left-color: var(--alert-important); }
+.markdown-alert-important .markdown-alert-title { color: var(--alert-important); }
+.markdown-alert-warning { border-left-color: var(--alert-warning); }
+.markdown-alert-warning .markdown-alert-title { color: var(--alert-warning); }
+.markdown-alert-caution { border-left-color: var(--alert-caution); }
+.markdown-alert-caution .markdown-alert-title { color: var(--alert-caution); }
+
+table { border-collapse: collapse; border-spacing: 0; display: block; max-width: 100%; overflow: auto; }
+th, td { border: 1px solid var(--border); padding: 6px 13px; }
+th { font-weight: 600; background: var(--bg-subtle); }
+tr:nth-child(2n) { background: var(--bg-subtle); }
+
+/* 数式 (KaTeX が無いときはそのまま等幅で見せる) */
+.math { background: var(--bg-subtle); border-radius: 4px; padding: 0.1em 0.3em; }
+.math-display { display: block; text-align: center; padding: 0.6em; margin: 0.8em 0; overflow-x: auto; }
+.math .katex { background: none; }
+
+/* Hugo のショートコード */
+.tb-shortcode {
+  display: inline-block;
+  color: var(--fg-muted);
+  background: var(--bg-subtle);
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  padding: 0.1em 0.5em;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.footnote-definition { font-size: 0.9em; color: var(--fg-muted); }
+.footnote-definition p { display: inline; }
+sup.footnote-reference { font-size: 0.75em; }
+mark { background: var(--mark-bg); }
+kbd {
+  font-size: 0.85em;
+  padding: 0.1em 0.4em;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg-subtle);
+}

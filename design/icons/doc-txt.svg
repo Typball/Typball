@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<defs>
+  <linearGradient id="dtxt-page" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#eef0f3"/>
+  </linearGradient>
+  <filter id="dtxt-drop" x="-10%" y="-10%" width="120%" height="125%">
+    <feDropShadow dx="0" dy="6" stdDeviation="8" flood-opacity="0.28"/>
+  </filter>
+  <radialGradient id="dtxtb-g" cx="0.5" cy="0.5" r="0.5" fx="0.36" fy="0.3">
+    <stop offset="0" stop-color="#ffffff"/><stop offset="0.3" stop-color="#e9ecf0"/>
+    <stop offset="0.75" stop-color="#c2c8d0"/><stop offset="1" stop-color="#8e96a2"/>
+  </radialGradient>
+  <clipPath id="dtxtb-clip"><circle cx="512" cy="592" r="152"/></clipPath>
+</defs>
+  <path d="M216,48 L648,48 L848,248 L848,936 Q848,976 808,976 L216,976 Q176,976 176,936 L176,88 Q176,48 216,48 Z" fill="url(#dtxt-page)" stroke="#b8bec8" stroke-width="5" filter="url(#dtxt-drop)"/>
+  <path d="M648,48 L648,216 Q648,248 680,248 L848,248 Z" fill="#dde1e7" stroke="#b8bec8" stroke-width="5" stroke-linejoin="round"/>
+  <text x="248" y="184" font-family="'Courier New', Courier, monospace" font-weight="bold" font-size="48" fill="#6b7280">Lorem ipsum</text>
+  <text x="248" y="252" font-family="'Courier New', Courier, monospace" font-weight="bold" font-size="48" fill="#8a919c">dolor sit</text>
+  <text x="248" y="320" font-family="'Courier New', Courier, monospace" font-weight="bold" font-size="48" fill="#8a919c">amet, consec</text>
+  <text x="248" y="388" font-family="'Courier New', Courier, monospace" font-weight="bold" font-size="48" fill="#8a919c">tetur adip</text>
+  <circle cx="512" cy="592" r="152" fill="url(#dtxtb-g)"/>
+  <g clip-path="url(#dtxtb-clip)"><ellipse cx="512" cy="572.67" rx="150.52" ry="61.22" fill="none" stroke="#2e343d" stroke-opacity="0.22" stroke-width="10.64"/><ellipse cx="512" cy="630.27" rx="146.11" ry="59.43" fill="none" stroke="#2e343d" stroke-opacity="0.22" stroke-width="10.64"/></g>
+  <ellipse cx="512" cy="469.39" rx="71.36" ry="29.02" fill="#f2f4f7" stroke="#2e343d" stroke-opacity="0.18" stroke-width="3.04"/>
+  <ellipse cx="512" cy="469.39" rx="32.11" ry="13.06" fill="#2e343d" fill-opacity="0.8"/>
+  <text x="512" y="655.54" font-family="'Courier New', Courier, monospace" font-weight="bold" font-size="144.4" text-anchor="middle" fill="#2e343d">T</text>
+  <path d="M648.5,634.22 A142.88,142.88 0 0 1 507.83,734.82" fill="none" stroke="#ffffff" stroke-opacity="0.55" stroke-width="6.08" stroke-linecap="round"/>
+  <path d="M176,768 L848,768 L848,936 Q848,976 808,976 L216,976 Q176,976 176,936 Z" fill="#6b7280"/>
+  <text x="512" y="916" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-weight="bold" font-size="136" text-anchor="middle" fill="#ffffff" letter-spacing="8">TXT</text>
+</svg>

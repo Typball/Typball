@@ -1,0 +1,70 @@
+# Windows ランナーに MinGW-w64 (WinLibs) を入れる composite action
+#
+# Code::Blocks 25.03 が同梱している MinGW は WinLibs の
+# "gcc-14.2.0-llvm-19.1.7-mingw-w64ucrt-12.0.0-r3" そのもの (MinGW\version_info.txt に記載) なので、
+# 同じリリースの zip を GitHub Releases から取得して展開する。gcc/g++・cmake・mingw32-make・ninja・
+# libclang がすべて mingw64\bin に入っており、ローカルの build.cmd と同一のコンパイラになる。
+name: Setup MinGW-w64 (WinLibs)
+description: Install the WinLibs MinGW-w64 build bundled with Code::Blocks 25.03 and export the env vars for a windows-gnu Rust build
+
+inputs:
+  tag:
+    description: WinLibs release tag
+    default: 14.2.0posix-12.0.0-ucrt-r3
+  archive:
+    description: Zip asset name inside the release
+    default: winlibs-x86_64-posix-seh-gcc-14.2.0-llvm-19.1.7-mingw-w64ucrt-12.0.0-r3.zip
+  sha256:
+    description: Expected SHA-256 of the zip (empty to skip the check)
+    default: "982be78644b2fe40187e11b209333d58d3cf17be87d87be62a7bc24f18040594"
+  install-dir:
+    description: Directory to extract into (mingw64\bin is added to PATH)
+    default: C:\winlibs
+
+runs:
+  using: composite
+  steps:
+    - name: Restore WinLibs from cache
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ inputs.install-dir }}
+        key: winlibs-${{ runner.os }}-${{ inputs.tag }}-${{ inputs.archive }}
+
+    - name: Download and extract WinLibs
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: pwsh
+      run: |
+        $url = "https://github.com/brechtsanders/winlibs_mingw/releases/download/${{ inputs.tag }}/${{ inputs.archive }}"
+        $zip = Join-Path $env:RUNNER_TEMP "winlibs.zip"
+        Write-Host "Downloading $url"
+        Invoke-WebRequest -Uri $url -OutFile $zip
+        $expected = "${{ inputs.sha256 }}"
+        if ($expected -ne "") {
+          $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $expected.ToLower()) {
+            Write-Error "SHA-256 mismatch: expected $expected, got $actual"
+            exit 1
+          }
+          Write-Host "SHA-256 OK: $actual"
+        }
+        New-Item -ItemType Directory -Force "${{ inputs.install-dir }}" | Out-Null
+        # 7z は Expand-Archive より数倍速い (ランナーに同梱)
+        & 7z x $zip "-o${{ inputs.install-dir }}" -y | Select-Object -Last 3
+        Remove-Item $zip
+
+    - name: Export toolchain environment
+      shell: pwsh
+      run: |
+        $bin = Join-Path "${{ inputs.install-dir }}" "mingw64\bin"
+        if (-not (Test-Path (Join-Path $bin "g++.exe"))) { Write-Error "g++.exe not found in $bin"; exit 1 }
+        Get-Content (Join-Path "${{ inputs.install-dir }}" "mingw64\version_info.txt") -TotalCount 1
+        Add-Content $env:GITHUB_PATH $bin
+        Add-Content $env:GITHUB_ENV "LIBCLANG_PATH=$bin"
+        Add-Content $env:GITHUB_ENV "CC_x86_64_pc_windows_gnu=$bin\gcc.exe"
+        Add-Content $env:GITHUB_ENV "CXX_x86_64_pc_windows_gnu=$bin\g++.exe"
+        Add-Content $env:GITHUB_ENV "AR_x86_64_pc_windows_gnu=$bin\ar.exe"
+        Add-Content $env:GITHUB_ENV "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=$bin\gcc.exe"
+        # cmake 内部で呼ばれる gcc/cmake もこの bin が最優先になるよう、他の MinGW (Strawberry Perl 等) より前に置く
+        & "$bin\gcc.exe" --version | Select-Object -First 1
+        & "$bin\cmake.exe" --version | Select-Object -First 1

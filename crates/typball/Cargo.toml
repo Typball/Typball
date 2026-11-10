@@ -1,0 +1,54 @@
+[package]
+name = "typball"
+description = "Typball: Typst のプレビュー付きタブエディタ (wxWidgets)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+build = "build.rs"
+
+[[bin]]
+# 実行ファイル名は頭大文字 (Typball.exe / Typball)。クレート名は小文字のまま
+name = "Typball"
+path = "src/main.rs"
+
+[dependencies]
+typball-core = { workspace = true }
+# stc: wxStyledTextCtrl (Scintilla) を有効化。wxWidgets のソースビルドに Scintilla/Lexilla が加わる
+wxdragon = { version = "0.9", features = ["stc", "webview"] }
+# Typst 公式の構文解析器。highlight() で構文木ノードを色分け用タグに分類できる
+typst-syntax = "0.15"
+# 設定ファイル (Settings.toml) と言語ファイル (locales/*.toml) の読み書き
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+# OS ごとの設定ディレクトリ (%APPDATA% / ~/.config / ~/Library/Application Support)
+dirs = "6"
+# OS の表示言語を取得する (言語設定が "system" のとき)
+sys-locale = "0.3"
+# Markdown → HTML (プレビュー)。拡張 (表・脚注・数式・GFM アラートなど) は Options で選ぶ
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+# コードブロックの色付け (Typst の依存にも入っている)。two-face は構文定義とテーマの追加セット
+syntect = { version = "5", default-features = false, features = ["parsing", "regex-fancy", "html"] }
+two-face = { version = "0.4", default-features = false, features = ["syntect-fancy"] }
+# run_script に渡す HTML を JavaScript の文字列リテラルにする
+serde_json = "1"
+# 更新の確認とダウンロード (GitHub Releases)。純 Rust の TLS で、証明書の検証は OS のストアに任せる
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+# タグ (v1.2.3) と CARGO_PKG_VERSION の比較
+semver = "1"
+# 実行中の自分自身を新しい exe で置き換える (Windows はリネームの技が要る)
+self-replace = "1"
+# ダウンロードしたファイルを Release の SHA256SUMS.txt と照合する
+sha2 = "0.11"
+# 配布物 (zip) から exe を取り出す
+zip = { version = "9", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies]
+# WebView2 の自前ローダー (レジストリ・LoadLibrary・CoTaskMemAlloc・バージョン情報、MinGW のみ) と、
+# 開発サーバーの子プロセスを親と道連れにするジョブオブジェクト、検索バーの入力欄への WM_CUT などの送信 (editmenu.rs)
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_System_Com", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_Security", "Win32_UI_WindowsAndMessaging", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_IO", "Win32_Graphics_Gdi"] }
+
+[target.'cfg(windows)'.build-dependencies]
+embed-manifest = "1.4"
+# アイコン (assets/icons/typball.rc) を exe に埋め込む。MinGW は windres、MSVC は rc を使う
+embed-resource = "3"

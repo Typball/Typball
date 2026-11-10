@@ -1,0 +1,358 @@
+# Typball の UI 文字列 (日本語)
+# 新しい言語を追加するには、このファイルをコピーして翻訳し、src/i18n.rs の LOCALES に登録する。
+# "&" の次の文字がメニューのアクセスキー、"\t" 以降がショートカットキー。
+# "{name}" はプログラム側で値に置き換えられるプレースホルダ。
+
+[meta]
+native_name = "日本語"
+
+[menu]
+file = "ファイル(&F)"
+new = "新規(&N)\tCtrl+N"
+new_as = "形式を選んで新規(&W)"
+open = "開く(&O)...\tCtrl+O"
+save = "上書き保存(&S)\tCtrl+S"
+save_as = "名前を付けて保存(&A)...\tCtrl+Shift+S"
+close_tab = "タブを閉じる(&C)\tCtrl+W"
+open_viewer = "プレビューウィンドウで開く(&V)"
+new_window = "新しいウィンドウ(&I)\tCtrl+Shift+N"
+move_tab = "タブを新しいウィンドウへ移動(&M)"
+exit = "終了(&X)"
+edit = "編集(&E)"
+undo = "元に戻す(&U)	Ctrl+Z"
+redo = "やり直し(&R)	Ctrl+Y"
+cut = "切り取り(&T)	Ctrl+X"
+copy = "コピー(&C)	Ctrl+C"
+paste = "貼り付け(&P)	Ctrl+V"
+delete = "削除(&D)"
+select_all = "すべて選択(&A)	Ctrl+A"
+search = "検索(&S)"
+find = "検索(&F)...	Ctrl+F"
+find_next = "次を検索(&N)	F3"
+find_prev = "前を検索(&P)	Shift+F3"
+replace = "置換(&R)...	Ctrl+H"
+goto_line = "指定行へ移動(&G)...	Ctrl+G"
+view = "表示(&V)"
+wrap_none = "折り返さない(&N)\tCtrl+1"
+wrap_column = "指定文字数で折り返し(&C)\tCtrl+2"
+wrap_window = "ウィンドウの右端で折り返し(&W)\tCtrl+3"
+line_numbers = "行番号(&L)"
+line_numbers_none = "表示しない(&N)"
+line_numbers_left = "左側(&L)"
+line_numbers_right = "右側(&R)"
+line_numbers_both = "両側(&B)"
+view_ruler = "ルーラー(&R)"
+view_changes = "編集した行を強調(&H)"
+clear_changes = "編集行の強調をすべて解除(&E)"
+clear_saved = "保存済みの行の強調を解除(&S)"
+view_outline = "アウトライン(&O)\tCtrl+Shift+L"
+view_preview = "プレビュー(&P)\tCtrl+Shift+P"
+view_console = "コンソール(&C)\tCtrl+Shift+K"
+actions = "アクション(&A)"
+no_actions = "この形式で使える操作はありません"
+tools = "ツール(&T)"
+preferences = "設定(&P)..."
+help = "ヘルプ(&H)"
+check_update = "更新を確認(&U)..."
+about = "バージョン情報(&A)"
+
+[menu.help_text]
+new = "既定の形式で新しいタブを開きます"
+open = "ファイルを開きます"
+save = "ファイルを保存します"
+save_as = "名前を付けてファイルを保存します"
+close_tab = "このタブを閉じます"
+open_viewer = "このファイルをエディタ無しのプレビュー専用ウィンドウで開きます (Typball.exe --view と同じ)"
+new_window = "新しいウィンドウを開きます"
+move_tab = "このタブを新しいウィンドウに移します"
+exit = "Typball を終了します"
+preferences = "Typball の設定を変更します"
+about = "バージョン情報を表示します"
+check_update = "GitHub に新しい版が公開されていないか確認します"
+view_console = "Typst のコンパイル結果や Markdown の変換結果、開発サーバーの出力を表示します"
+find = "エディタの上に検索バーを出します"
+replace = "検索バーを置換付きで出します"
+goto_line = "行番号を指定してその行へ移動します"
+clear_changes = "このタブの編集行の強調 (未保存・保存済みの両方) を消します"
+clear_saved = "このタブの保存済みの編集行の強調だけを消します"
+
+[filetype]
+txt = "テキスト (.txt)"
+md = "Markdown (.md)"
+typ = "Typst (.typ)"
+
+# ステータスバーに出す短い名前
+[filetype.short]
+txt = "Text"
+md = "Markdown"
+typ = "Typst"
+
+[document]
+# 新規文書の名前。設定で番号を付けると "無題-1.txt" になる
+untitled = "無題"
+
+[template]
+# 新しいファイル (Ctrl+N、起動時の新規タブ) の雛形。設定 [filetypes.*] template で上書きできる
+md = ""
+typ = "#set page(paper: \"a4\")\n#set text(font: \"Noto Sans JP\", lang: \"ja\", size: 11pt)\n\n= 新しい文書\n\n"
+
+[pane]
+outline = "アウトライン"
+preview = "プレビュー"
+console = "コンソール"
+float = "別ウィンドウに切り離す"
+dock = "ウィンドウに戻す"
+collapse = "折りたたむ (端のバーをクリックで戻る)"
+menu = "配置"
+position_left = "左に表示(&L)"
+position_right = "右に表示(&R)"
+position_bottom = "下に表示(&B)"
+hide = "非表示(&H)"
+# ヘッダをドラッグしているときの行き先の表示
+drop_left = "左に表示"
+drop_right = "右に表示"
+drop_bottom = "下に表示"
+drop_same = "いまの場所"
+drop_below = "「{name}」の下に並べる"
+drop_right_of = "「{name}」の右に並べる"
+# 下に置いたペインのメニューだけに出る
+bottom_wide = "ウィンドウ幅に広げる(&W)"
+
+[dnd]
+# ファイルをドラッグしてきたときにポインタの脇に出る説明文
+open = "Typball で開く"
+
+[action]
+# アクションメニューの項目 (.menu) とアクションバーのツールチップ (.tip)
+export_pdf.menu = "PDF に書き出し(&E)...\tCtrl+E"
+export_pdf.tip = "Typst 文書を PDF に書き出します"
+bold.menu = "太字(&B)\tCtrl+B"
+bold.tip = "太字"
+italic.menu = "斜体(&I)\tCtrl+I"
+italic.tip = "斜体"
+heading.menu = "見出し(&H)"
+heading.tip = "見出し (もう一度押すとレベルを下げる)"
+code.menu = "コード(&C)"
+code.tip = "コード"
+link.menu = "リンク(&L)"
+link.tip = "リンク"
+list.menu = "箇条書き(&U)"
+list.tip = "箇条書き"
+quote.menu = "引用(&Q)"
+quote.tip = "引用"
+math.menu = "数式(&M)"
+math.tip = "数式"
+
+[dialog]
+open_title = "開く"
+save_title = "名前を付けて保存"
+export_pdf_title = "PDF に書き出し"
+save_changes = "{name} の変更を保存しますか?"
+reload = "{name} は別のプログラムで変更されました。読み直しますか?"
+reload_modified = "{name} は別のプログラムで変更されました。このタブには未保存の変更があり、読み直すと失われます。読み直しますか?"
+reload_confirm = "{name} をディスクから読み直しますか? 未保存の変更は失われます。"
+open_error = "{path} を開けませんでした: {error}"
+save_error = "{path} に保存できませんでした: {error}"
+export_error = "PDF を書き出せませんでした: {error}"
+
+[status]
+ok = "OK"
+position = "{line} 行, {col} 桁"
+chars = "{n} 文字"
+encoding = "UTF-8 (BOM 無し)"
+saved = "保存しました: {path}"
+exported_pdf = "PDF を書き出しました: {path}"
+reloaded = "{name} を読み直しました"
+external_changed = "{name} は外部で変更されています (読み直していません)"
+external_deleted = "{name} は外部で削除または移動されました"
+settings_load_error = "設定ファイルを読み込めなかったため既定値を使います: {error}"
+settings_save_error = "設定ファイルを保存できませんでした: {error}"
+
+[about]
+description = "Typst のプレビュー付きタブエディタ"
+copyright = "(C) 2026 Typball contributors"
+website = "GitHub リポジトリ"
+# バージョン情報の「ライセンス」に Typball の LICENSE に続けて出す。全文は THIRD-PARTY-NOTICES.txt
+third_party = """
+同梱しているフォントとソフトウェア:
+・Noto Sans JP — SIL Open Font License 1.1
+・Typst 同梱フォント
+    Libertinus Serif — SIL Open Font License 1.1
+    New Computer Modern — GUST Font License 1.0
+        (NewCM10-Regular は GPL-3.0 以降 + フォント例外)
+    DejaVu Sans Mono — Bitstream Vera Fonts License
+    PDF 標準フォント (Foxit) — BSD-3-Clause
+・Typst — Apache License 2.0
+・wxWidgets — wxWindows Library Licence 3.1
+・wxWidgets に内蔵のライブラリ
+    Scintilla / Lexilla — Scintilla License
+    libpng — PNG Reference Library License v2
+    zlib・NanoSVG — zlib License
+    libjpeg — IJG License
+    libtiff — libtiff License
+    Expat — MIT
+    PCRE2 — BSD-3-Clause
+    Microsoft Edge WebView2 SDK — BSD-3-Clause
+・Rust のライブラリ (約 380 個) — MIT・Apache-2.0 ほか、それぞれのライセンス
+
+This software is based in part on the work of the Independent JPEG Group.
+
+各ライセンスの全文と Rust のライブラリの一覧は、Typball に同梱の
+THIRD-PARTY-NOTICES.txt にあります。"""
+
+[settings]
+title = "設定"
+file_location = "設定ファイル: {path}"
+ok = "OK"
+cancel = "キャンセル"
+
+[settings.general]
+title = "一般"
+language = "表示言語:"
+language_system = "システムの言語に従う"
+language_note = "言語の変更はメニューにすぐ反映されます。開いているダイアログは次回開いたときに切り替わります。"
+last_tab = "最後のタブを閉じたとき:"
+last_tab_keep = "空のタブを開いたままにする"
+last_tab_close = "ウィンドウを閉じる (最後のウィンドウなら終了)"
+bottom_width = "下のペインの幅:"
+bottom_width_editor = "エディタの幅 (左右のペインは下まで伸びる)"
+bottom_width_window = "ウィンドウの幅 (左右のペインの下にも広げる)"
+instance = "もう一度起動したとき:"
+instance_single = "起動中の Typball でファイルを開く (--new-instance で別に起動)"
+instance_multiple = "別の Typball として起動する (タブの移動は同じプロセス内だけ)"
+
+[settings.editor]
+title = "エディタ"
+font_face = "フォント:"
+font_size = "フォントサイズ (pt):"
+tab_width = "タブ幅:"
+wrap = "折り返し:"
+wrap_none = "折り返さない"
+wrap_window = "ウィンドウの右端で折り返す"
+wrap_column = "指定文字数で折り返す"
+wrap_column_width = "折り返す文字数:"
+line_numbers = "行番号:"
+line_numbers_none = "表示しない"
+line_numbers_left = "左側"
+line_numbers_right = "右側"
+line_numbers_both = "両側"
+highlight_changes = "編集した行を強調する"
+saved_changes = "保存したとき:"
+saved_changes_keep = "色を変えて強調を残す"
+saved_changes_clear = "強調を解除する"
+show_ruler = "ルーラーを表示する"
+
+[settings.files]
+title = "ファイル"
+default_filetype = "新規タブの形式:"
+external_change = "外部で変更されたとき:"
+external_change_ask = "確認する"
+external_change_reload = "自動で読み直す (未保存の変更があるときは確認)"
+external_change_ignore = "読み直さない"
+untitled_numbering = "新規文書の名前に番号を付ける (無題-1.txt)"
+panes_note = "形式ごとに表示するペインとバー (開いているタブにも反映されます):"
+show_outline = "アウトライン"
+show_preview = "プレビュー"
+show_console = "コンソール"
+show_actionbar = "アクションバー"
+sync_note = "スクロール同期 (Markdown のプレビュー。先頭では上端、末尾では下端の行で合わせます):"
+sync_to_preview = "エディタ → プレビュー"
+sync_to_editor = "プレビュー → エディタ"
+open_note = "ダブルクリックやコマンドラインでファイルを渡されたときの開き方\n(--edit / --view を付けると優先されます。プレビューウィンドウの「編集」でエディタに移せます):"
+open_in_viewer = "プレビューウィンドウで開く"
+template_note = "{name} の新しいファイルの雛形 (Ctrl+N と、起動時に開く新規タブの中身):"
+template_reset = "既定に戻す(&R)"
+
+[find]
+label = "検索:"
+replace_label = "置換:"
+next = "次へ(&N)"
+prev = "前へ(&P)"
+replace_one = "置換(&R)"
+replace_all = "すべて置換(&A)"
+match_case = "大文字と小文字を区別"
+whole_word = "単語単位"
+regex = "正規表現"
+close_tip = "閉じる (Esc)"
+not_found = "見つかりません"
+replaced = "{n} 件を置換しました"
+goto_title = "指定行へ移動"
+goto_prompt = "行番号 (1 - {max}):"
+
+[viewer]
+title = "プレビュー"
+edit = "編集(&E)"
+edit_tip = "このファイルをエディタで開きます (このウィンドウは閉じます)"
+
+[console]
+hint = "ここにコンパイル / 変換の結果が出ます。行:桁 の付いた行をダブルクリックするとその行へ移動します。"
+typst_ok = "Typst: OK ({pages} ページ, {ms} ms)"
+typst_warnings = "Typst: OK、警告あり ({pages} ページ, {ms} ms)"
+typst_failed = "Typst: エラー ({ms} ms)"
+markdown = "Markdown → HTML: {lines} 行, {chars} 文字 ({ms} ms)"
+site_server = "開発サーバー: {url}"
+
+[tabmenu]
+close = "閉じる(&C)"
+close_others = "他のタブを閉じる(&O)"
+close_all = "すべてのタブを閉じる(&A)"
+save = "上書き保存(&S)"
+save_as = "名前を付けて保存(&N)..."
+reload = "ディスクから読み直す(&R)"
+move_to_window = "新しいウィンドウへ移動(&M)"
+open_folder = "ファイルの場所を開く(&F)"
+copy_path = "パスをコピー(&P)"
+
+[preview]
+# Markdown のプレビュー (WebView) のモード切り替えバー
+mode_markdown = "Markdown"
+mode_site = "サイト (開発サーバー)"
+site_hint = "保存すると更新されます"
+site_starting = "開発サーバーを起動しています..."
+site_error = "開発サーバーを起動できませんでした: {error}"
+site_timeout = "開発サーバーが応答しません"
+webview_missing = "WebView2 ランタイムが見つからないため、HTML プレビューを表示できません。Microsoft Edge WebView2 ランタイムをインストールしてください。"
+
+[update]
+# 更新の確認 (ヘルプ → 更新を確認、起動時の自動確認)
+title = "Typball の更新"
+checking = "更新を確認しています..."
+up_to_date = "お使いの Typball (v{version}) は最新です。"
+no_release = "まだ公開された版がありません (お使いの Typball は v{version})。"
+check_failed = "更新を確認できませんでした: {error}"
+available = "新しい版 v{new} があります (お使いの Typball は v{current})。"
+available_nightly = "新しい開発版 ({new}) があります (お使いの Typball は v{current})。開発版はテストされていない変更を含みます。"
+no_notes = "(リリースノートはありません)"
+open_releases = "Releases ページを開く"
+install = "更新して再起動(&U)"
+skip = "この版はスキップ(&S)"
+later = "後で(&L)"
+downloading_title = "更新をダウンロードしています"
+downloading = "ダウンロード中: {done} / {total} MB"
+failed = "更新を取得できませんでした: {error}"
+apply_failed = "更新を適用できませんでした: {error}\n\nReleases ページから手動で入れ替えてください: {url}"
+restarting = "更新を適用して Typball を再起動します..."
+cancelled = "更新を中止しました"
+
+[settings.preview]
+title = "プレビュー"
+font_face = "フォント:"
+font_size = "フォントサイズ (pt):"
+font_note = "Typst は文書が #set text(font:) で指定しないときの既定、Markdown のプレビューの本文、プレビューウィンドウのテキスト表示に使います。同梱の Noto Sans JP はインストールしなくても使えます。エディタのフォントは「エディタ」ページで別に決めます。"
+markdown_mode = "Markdown のプレビュー:"
+markdown_mode_auto = "自動 (サイトのプロジェクト内ならサイトモード)"
+markdown_mode_markdown = "Markdown を HTML にして表示"
+markdown_mode_site = "サイトの開発サーバーを表示"
+site_command = "開発サーバーのコマンド:"
+site_url = "表示する URL:"
+# 日本語は空白が無いと wx が折り返せないので、文の切れ目に改行を入れておく
+site_note = "{port} は空きポート、{root} はプロジェクトのフォルダ (hugo.toml などのある場所) に置き換わります。\n既定のコマンドの navigateToChanged により、保存した記事のページへ自動で移動します。"
+
+[settings.update]
+title = "更新"
+check_on_startup = "起動時に新しい版が公開されていないか確認する"
+channel = "更新チャネル:"
+channel_stable = "安定版 (番号を付けて公開された版だけ)"
+channel_nightly = "開発版も含める (push ごとの最新ビルド、nightly)"
+interval = "確認の間隔 (時間):"
+note = "GitHub の Releases ({url}) を見に行きます。ネットワークにつながらないときは何もしません。手動で確認するにはヘルプ → 更新を確認。開発版はテストされていない変更を含みます。お使いの Typball は v{version} です。"

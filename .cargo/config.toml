@@ -1,0 +1,8 @@
+# ビルドスクリプト・rustc に渡す環境変数 (cargo build / cargo run の両方に効く)
+[env]
+# wxWidgets の Edge (WebView2) バックエンドを「静的ローダー」構成で組む (vendor/wxdragon-sys の Typball patch)。
+# MinGW では WebView2Loader.dll の代わりに crates/typball/src/webview2_loader.rs が同じ関数を提供する
+WXDRAGON_WEBVIEW_EDGE_STATIC = "1"
+# wxdragon-sys は Windows の webview ビルドで TLS 検証を切る既定なので、明示的に有効にする
+# (CMake が WebView2 SDK の nupkg を nuget.org から取ってくる)
+CMAKE_TLS_VERIFY = "1"

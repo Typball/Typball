@@ -1,0 +1,395 @@
+#include <wx/wxprec.h>
+#include <wx/wx.h>
+#include "../../include/wxdragon.h"
+
+#if wxUSE_ACCESSIBILITY
+#include <wx/access.h>
+
+// The header's WXD_ACC_STATE_SYSTEM_* flags reach wxAccessible::GetState unchanged, and
+// wxWidgets converts its own numbering to the platform's states. Checked here so a value that
+// moves upstream is a build failure rather than a screen reader hearing another state (#250).
+#define WXD_ACC_STATE_CHECK(ours, theirs) \
+    static_assert((ours) == (theirs), #ours " does not match " #theirs)
+
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_ALERT_HIGH, wxACC_STATE_SYSTEM_ALERT_HIGH);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_ALERT_MEDIUM, wxACC_STATE_SYSTEM_ALERT_MEDIUM);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_ALERT_LOW, wxACC_STATE_SYSTEM_ALERT_LOW);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_ANIMATED, wxACC_STATE_SYSTEM_ANIMATED);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_BUSY, wxACC_STATE_SYSTEM_BUSY);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_CHECKED, wxACC_STATE_SYSTEM_CHECKED);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_COLLAPSED, wxACC_STATE_SYSTEM_COLLAPSED);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_DEFAULT, wxACC_STATE_SYSTEM_DEFAULT);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_EXPANDED, wxACC_STATE_SYSTEM_EXPANDED);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_EXTSELECTABLE, wxACC_STATE_SYSTEM_EXTSELECTABLE);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_FLOATING, wxACC_STATE_SYSTEM_FLOATING);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_FOCUSABLE, wxACC_STATE_SYSTEM_FOCUSABLE);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_FOCUSED, wxACC_STATE_SYSTEM_FOCUSED);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_HOTTRACKED, wxACC_STATE_SYSTEM_HOTTRACKED);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_INVISIBLE, wxACC_STATE_SYSTEM_INVISIBLE);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_MARQUEED, wxACC_STATE_SYSTEM_MARQUEED);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_MIXED, wxACC_STATE_SYSTEM_MIXED);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_MULTISELECTABLE, wxACC_STATE_SYSTEM_MULTISELECTABLE);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_OFFSCREEN, wxACC_STATE_SYSTEM_OFFSCREEN);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_PRESSED, wxACC_STATE_SYSTEM_PRESSED);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_PROTECTED, wxACC_STATE_SYSTEM_PROTECTED);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_READONLY, wxACC_STATE_SYSTEM_READONLY);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_SELECTABLE, wxACC_STATE_SYSTEM_SELECTABLE);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_SELECTED, wxACC_STATE_SYSTEM_SELECTED);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_SELFVOICING, wxACC_STATE_SYSTEM_SELFVOICING);
+WXD_ACC_STATE_CHECK(WXD_ACC_STATE_SYSTEM_UNAVAILABLE, wxACC_STATE_SYSTEM_UNAVAILABLE);
+
+class WxdCustomAccessible : public wxAccessible {
+public:
+    WxdCustomAccessible(wxWindow* win, wxd_AccessibleCallbacks callbacks, void* userData)
+        : wxAccessible(win), m_callbacks(callbacks), m_userData(userData)
+    {}
+
+    ~WxdCustomAccessible() override {
+        if (m_callbacks.DestroyUserData) {
+            m_callbacks.DestroyUserData(m_userData);
+        }
+    }
+
+    wxAccStatus GetChildCount(int* childCount) override {
+        if (m_callbacks.GetChildCount) {
+            return (wxAccStatus)m_callbacks.GetChildCount(m_userData, childCount);
+        }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+
+    wxAccStatus GetChild(int childId, wxAccessible** child) override {
+        if (m_callbacks.GetChild) {
+            return (wxAccStatus)m_callbacks.GetChild(m_userData, childId, reinterpret_cast<wxd_Accessible_t**>(child));
+        }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+
+    wxAccStatus GetParent(wxAccessible** parent) override {
+        if (m_callbacks.GetParent) {
+            return (wxAccStatus)m_callbacks.GetParent(m_userData, reinterpret_cast<wxd_Accessible_t**>(parent));
+        }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+
+    wxAccStatus GetRole(int childId, wxAccRole* role) override {
+        if (m_callbacks.GetRole) {
+            return (wxAccStatus)m_callbacks.GetRole(m_userData, childId, reinterpret_cast<wxd_AccRole*>(role));
+        }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+
+    wxAccStatus GetState(int childId, long* state) override {
+        if (m_callbacks.GetState) {
+            return (wxAccStatus)m_callbacks.GetState(m_userData, childId, state);
+        }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+
+    wxAccStatus GetName(int childId, wxString* name) override {
+        if (m_callbacks.GetName) {
+            char buf[1024] = {};
+            wxd_AccStatus status = m_callbacks.GetName(m_userData, childId, buf, sizeof(buf));
+            if (status == WXD_ACC_OK) {
+                *name = wxString::FromUTF8(buf);
+            }
+            return (wxAccStatus)status;
+        }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+
+    wxAccStatus GetDescription(int childId, wxString* description) override {
+        if (m_callbacks.GetDescription) {
+            char buf[1024] = {};
+            wxd_AccStatus status = m_callbacks.GetDescription(m_userData, childId, buf, sizeof(buf));
+            if (status == WXD_ACC_OK) {
+                *description = wxString::FromUTF8(buf);
+            }
+            return (wxAccStatus)status;
+        }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+
+    wxAccStatus GetHelpText(int childId, wxString* helpText) override {
+        if (m_callbacks.GetHelpText) {
+            char buf[1024] = {};
+            wxd_AccStatus status = m_callbacks.GetHelpText(m_userData, childId, buf, sizeof(buf));
+            if (status == WXD_ACC_OK) {
+                *helpText = wxString::FromUTF8(buf);
+            }
+            return (wxAccStatus)status;
+        }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+
+    wxAccStatus GetKeyboardShortcut(int childId, wxString* shortcut) override {
+        if (m_callbacks.GetKeyboardShortcut) {
+            char buf[1024] = {};
+            wxd_AccStatus status = m_callbacks.GetKeyboardShortcut(m_userData, childId, buf, sizeof(buf));
+            if (status == WXD_ACC_OK) {
+                *shortcut = wxString::FromUTF8(buf);
+            }
+            return (wxAccStatus)status;
+        }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+
+    wxAccStatus GetDefaultAction(int childId, wxString* actionName) override {
+        if (m_callbacks.GetDefaultAction) {
+            char buf[1024] = {};
+            wxd_AccStatus status = m_callbacks.GetDefaultAction(m_userData, childId, buf, sizeof(buf));
+            if (status == WXD_ACC_OK) {
+                *actionName = wxString::FromUTF8(buf);
+            }
+            return (wxAccStatus)status;
+        }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+
+    wxAccStatus GetValue(int childId, wxString* value) override {
+        if (m_callbacks.GetValue) {
+            char buf[1024] = {};
+            wxd_AccStatus status = m_callbacks.GetValue(m_userData, childId, buf, sizeof(buf));
+            if (status == WXD_ACC_OK) {
+                *value = wxString::FromUTF8(buf);
+            }
+            return (wxAccStatus)status;
+        }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+
+    wxAccStatus Select(int childId, wxAccSelectionFlags selectFlags) override {
+        if (m_callbacks.Select) {
+            return (wxAccStatus)m_callbacks.Select(m_userData, childId, (int)selectFlags);
+        }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+
+    wxAccStatus GetSelections(wxVariant* selections) override {
+        if (m_callbacks.GetSelections) {
+            return (wxAccStatus)m_callbacks.GetSelections(m_userData, reinterpret_cast<wxd_Variant_t*>(selections));
+        }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+
+    wxAccStatus GetFocus(int* childId, wxAccessible** child) override {
+        if (m_callbacks.GetFocus) {
+            return (wxAccStatus)m_callbacks.GetFocus(m_userData, childId, reinterpret_cast<wxd_Accessible_t**>(child));
+        }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+
+    wxAccStatus DoDefaultAction(int childId) override {
+        if (m_callbacks.DoDefaultAction) {
+            return (wxAccStatus)m_callbacks.DoDefaultAction(m_userData, childId);
+        }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+
+    wxAccStatus GetLocation(wxRect& rect, int childId) override {
+        if (m_callbacks.GetLocation) {
+            wxd_Rect r;
+            wxd_AccStatus status = m_callbacks.GetLocation(m_userData, childId, &r);
+            if (status == WXD_ACC_OK) {
+                rect = wxRect(r.x, r.y, r.width, r.height);
+            }
+            return (wxAccStatus)status;
+        }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+
+    wxAccStatus HitTest(const wxPoint& pt, int* childId, wxAccessible** childObject) override {
+        if (m_callbacks.HitTest) {
+            wxd_Point p = { pt.x, pt.y };
+            return (wxAccStatus)m_callbacks.HitTest(m_userData, p, childId, reinterpret_cast<wxd_Accessible_t**>(childObject));
+        }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+
+    wxAccStatus Navigate(wxNavDir navDir, int fromId, int* toId, wxAccessible** toObject) override {
+        if (m_callbacks.Navigate) {
+            return (wxAccStatus)m_callbacks.Navigate(m_userData, (wxd_NavDir)navDir, fromId, toId, reinterpret_cast<wxd_Accessible_t**>(toObject));
+        }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+
+private:
+    wxd_AccessibleCallbacks m_callbacks;
+    void* m_userData;
+};
+
+// The wxAccessible child id that refers to the object (window) itself, as opposed
+// to one of its children. (wxWidgets maps this onto MSAA's CHILDID_SELF on Windows.)
+static constexpr int ACC_ID_SELF = 0;
+
+// Stores the property overrides not provided by wxWindow itself. Accessible
+// names are handled exclusively by wxWindow::SetAccessibleName().
+class WxdSimpleAccessible : public wxAccessible {
+public:
+    explicit WxdSimpleAccessible(wxWindow* win) : wxAccessible(win) {}
+
+    void SetRoleProp(wxAccRole r)                  { m_role = r;  m_hasRole = true; }
+    void SetDescProp(const wxString& s, bool has)  { m_desc = s;  m_hasDesc = has; }
+    void SetValueProp(const wxString& s, bool has) { m_value = s; m_hasValue = has; }
+    void SetStateProp(long v)                      { m_state = v; m_hasState = true; }
+
+    wxAccStatus GetRole(int childId, wxAccRole* role) override {
+        if (childId == ACC_ID_SELF && m_hasRole) { *role = m_role; return wxACC_OK; }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+    wxAccStatus GetDescription(int childId, wxString* description) override {
+        if (childId == ACC_ID_SELF && m_hasDesc) { *description = m_desc; return wxACC_OK; }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+    wxAccStatus GetValue(int childId, wxString* value) override {
+        if (childId == ACC_ID_SELF && m_hasValue) { *value = m_value; return wxACC_OK; }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+    wxAccStatus GetState(int childId, long* state) override {
+        if (childId == ACC_ID_SELF && m_hasState) { *state = m_state; return wxACC_OK; }
+        return wxACC_NOT_IMPLEMENTED;
+    }
+
+private:
+    wxString m_desc, m_value;
+    wxAccRole m_role = wxROLE_NONE;
+    long m_state = 0;
+    bool m_hasRole = false, m_hasDesc = false, m_hasValue = false, m_hasState = false;
+};
+
+// Returns the window's WxdSimpleAccessible, creating and attaching one if the window
+// does not already have one of this type. The window takes ownership.
+static WxdSimpleAccessible* wxd_GetOrCreateSimpleAccessible(wxWindow* window) {
+    WxdSimpleAccessible* simple = dynamic_cast<WxdSimpleAccessible*>(window->GetAccessible());
+    if (!simple) {
+        simple = new WxdSimpleAccessible(window);
+        // SetAccessible deletes the old object. Preserve the upstream name
+        // override when a later property setter installs our lightweight object.
+        if (wxAccessible* previous = window->GetAccessible()) {
+            simple->SetNameOverride(previous->GetNameOverride());
+        }
+        window->SetAccessible(simple);
+    }
+    return simple;
+}
+#endif
+
+extern "C" {
+
+wxd_Accessible_t*
+wxd_Accessible_Create(wxd_Window_t* window, wxd_AccessibleCallbacks callbacks, void* userData)
+{
+#if wxUSE_ACCESSIBILITY
+    return reinterpret_cast<wxd_Accessible_t*>(new WxdCustomAccessible(reinterpret_cast<wxWindow*>(window), callbacks, userData));
+#else
+    return nullptr;
+#endif
+}
+
+void
+wxd_Accessible_Destroy(wxd_Accessible_t* self)
+{
+#if wxUSE_ACCESSIBILITY
+    if (self) {
+        delete reinterpret_cast<wxAccessible*>(self);
+    }
+#endif
+}
+
+void
+wxd_Accessible_NotifyEvent(uint32_t eventType, wxd_Window_t* window, int objectType, int objectId)
+{
+#if wxUSE_ACCESSIBILITY
+    wxAccessible::NotifyEvent(eventType, reinterpret_cast<wxWindow*>(window),
+                               static_cast<wxAccObject>(objectType), objectId);
+#endif
+}
+
+void
+wxd_Window_SetAccessible(wxd_Window_t* self, wxd_Accessible_t* accessible)
+{
+#if wxUSE_ACCESSIBILITY
+    wxWindow* window = reinterpret_cast<wxWindow*>(self);
+    wxAccessible* acc = reinterpret_cast<wxAccessible*>(accessible);
+    if (window) {
+        window->SetAccessible(acc);
+    }
+#endif
+}
+
+wxd_Accessible_t*
+wxd_Window_GetAccessible(wxd_Window_t* self)
+{
+#if wxUSE_ACCESSIBILITY
+    wxWindow* window = reinterpret_cast<wxWindow*>(self);
+    if (window) {
+        return reinterpret_cast<wxd_Accessible_t*>(window->GetAccessible());
+    }
+#endif
+    return nullptr;
+}
+
+void
+wxd_Window_SetAccessibleName(wxd_Window_t* self, const char* name)
+{
+    wxWindow* window = reinterpret_cast<wxWindow*>(self);
+    if (window) {
+        window->SetAccessibleName(WXD_STR_TO_WX_STRING_UTF8_NULL_OK(name));
+    }
+}
+
+void
+wxd_Window_SetAccessibleRole(wxd_Window_t* self, wxd_AccRole role)
+{
+#if wxUSE_ACCESSIBILITY
+    wxWindow* window = reinterpret_cast<wxWindow*>(self);
+    if (window) {
+        wxd_GetOrCreateSimpleAccessible(window)
+            ->SetRoleProp(static_cast<wxAccRole>(role));
+    }
+#else
+    (void)self; (void)role;
+#endif
+}
+
+void
+wxd_Window_SetAccessibleDescription(wxd_Window_t* self, const char* description)
+{
+#if wxUSE_ACCESSIBILITY
+    wxWindow* window = reinterpret_cast<wxWindow*>(self);
+    if (window) {
+        wxd_GetOrCreateSimpleAccessible(window)
+            ->SetDescProp(WXD_STR_TO_WX_STRING_UTF8_NULL_OK(description), description != nullptr);
+    }
+#else
+    (void)self; (void)description;
+#endif
+}
+
+void
+wxd_Window_SetAccessibleValue(wxd_Window_t* self, const char* value)
+{
+#if wxUSE_ACCESSIBILITY
+    wxWindow* window = reinterpret_cast<wxWindow*>(self);
+    if (window) {
+        wxd_GetOrCreateSimpleAccessible(window)
+            ->SetValueProp(WXD_STR_TO_WX_STRING_UTF8_NULL_OK(value), value != nullptr);
+    }
+#else
+    (void)self; (void)value;
+#endif
+}
+
+void
+wxd_Window_SetAccessibleState(wxd_Window_t* self, long state)
+{
+#if wxUSE_ACCESSIBILITY
+    wxWindow* window = reinterpret_cast<wxWindow*>(self);
+    if (window) {
+        wxd_GetOrCreateSimpleAccessible(window)->SetStateProp(state);
+    }
+#else
+    (void)self; (void)state;
+#endif
+}
+
+} // extern "C"

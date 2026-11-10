@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<defs>
+  <radialGradient id="ttyp-g" cx="0.5" cy="0.5" r="0.5" fx="0.36" fy="0.3">
+    <stop offset="0" stop-color="#ffffff"/><stop offset="0.3" stop-color="#e9ecf0"/>
+    <stop offset="0.75" stop-color="#c2c8d0"/><stop offset="1" stop-color="#8e96a2"/>
+  </radialGradient>
+  <clipPath id="ttyp-clip"><circle cx="384" cy="368" r="217.6"/></clipPath>
+  <clipPath id="ttyp-page"><path d="M128,32 H640 L896,288 V960 a32,32 0 0 1 -32,32 H160 a32,32 0 0 1 -32,-32 Z"/></clipPath>
+</defs>
+  <path d="M128,32 H640 L896,288 V960 a32,32 0 0 1 -32,32 H160 a32,32 0 0 1 -32,-32 Z" fill="#ffffff"/>
+  <rect x="0" y="672" width="1024" height="448" fill="#1f8a9a" clip-path="url(#ttyp-page)"/>
+  <path d="M640,32 V288 H896" fill="#dde1e7" stroke="#8a919c" stroke-width="32" stroke-linejoin="round"/>
+  <path d="M128,32 H640 L896,288 V960 a32,32 0 0 1 -32,32 H160 a32,32 0 0 1 -32,-32 Z" fill="none" stroke="#8a919c" stroke-width="32"/>
+  <circle cx="384" cy="368" r="217.6" fill="#1f8a9a"/>
+  <g clip-path="url(#ttyp-clip)"><ellipse cx="384" cy="340.33" rx="215.48" ry="87.64" fill="none" stroke="#ffffff" stroke-opacity="0.4" stroke-width="15.23"/><ellipse cx="384" cy="422.79" rx="209.17" ry="85.08" fill="none" stroke="#ffffff" stroke-opacity="0.4" stroke-width="15.23"/></g>
+  <ellipse cx="384" cy="192.48" rx="102.16" ry="41.55" fill="#ffffff" stroke="#2e343d" stroke-opacity="0.18" stroke-width="4.35"/>
+  <ellipse cx="384" cy="192.48" rx="45.97" ry="18.7" fill="#1f8a9a" fill-opacity="0.8"/>
+</svg>

@@ -1,0 +1,257 @@
+//! エディタの周りに自前で描く部品: 上部のルーラーと右側の行番号
+//!
+//! Scintilla のマージンは左側にしか置けないので、右側の行番号と上部のルーラーは wxPanel に
+//! 自前で描く。表示位置は Scintilla に問い合わせる (`scintilla.rs`: 先頭の表示行・行の高さ・
+//! 文書位置の座標) ので、折り返し行やズーム (Ctrl+ホイール) にも追従する。
+//! 再描画はエディタの UpdateUI イベント (キャレット移動・スクロール・変更) で行う。
+
+use wxdragon::prelude::*;
+
+use crate::editor::{
+    self, rgb, LineChange, CHANGE_STRIP_WIDTH, GUTTER_BG, GUTTER_FG, GUTTER_FG_MODIFIED,
+    GUTTER_FG_SAVED,
+};
+use crate::scintilla;
+use crate::settings::{self, Settings};
+use crate::theme;
+
+/// 自前描画用のパネルを作る (背景は paint ハンドラで塗るのでシステムには消させない)。
+/// サイズが変わったら全体を描き直す (既定では新しく見えた部分しか再描画されず、
+/// 目盛りの数字が途中で切れたり消えたりする)
+pub fn drawing_panel(parent: &Panel, size: Size) -> Panel {
+    let panel = Panel::builder(parent).with_size(size).build();
+    panel.set_min_size(size);
+    panel.set_background_style(BackgroundStyle::Paint);
+    panel.on_erase_background(|_| {});
+    panel.on_size(move |_| panel.refresh(false, None));
+    panel
+}
+
+// ---------------------------------------------------------------------------
+// ルーラー
+// ---------------------------------------------------------------------------
+
+/// エディタ上部のルーラー。本文の列位置に目盛りを打ち、キャレットの位置に黒いマーカーを出す。
+/// 目盛りの間隔は数字 "0" の幅 (プロポーショナルフォントでは目安)。
+#[derive(Clone)]
+pub struct Ruler {
+    panel: Panel,
+    container: Panel,
+    stc: StyledTextCtrl,
+}
+
+impl Ruler {
+    pub fn new(container: &Panel, stc: StyledTextCtrl) -> Self {
+        let panel = drawing_panel(container, Size::new(-1, ruler_height(&stc)));
+        panel.on_paint({
+            let panel = panel;
+            move |_| paint_ruler(&panel, &stc)
+        });
+        Self {
+            panel,
+            container: *container,
+            stc,
+        }
+    }
+
+    pub fn window(&self) -> &Panel {
+        &self.panel
+    }
+
+    /// 高さをフォントに合わせてから再描画する
+    pub fn refresh(&self) {
+        let h = ruler_height(&self.stc);
+        if self.panel.get_min_size().height != h {
+            self.panel.set_min_size(Size::new(-1, h));
+            self.container.layout();
+        }
+        self.panel.refresh(false, None);
+    }
+}
+
+/// ルーラーの高さ = 本文 1 行の高さ
+fn ruler_height(stc: &StyledTextCtrl) -> i32 {
+    scintilla::text_height(stc, 0).clamp(14, 64)
+}
+
+fn paint_ruler(panel: &Panel, stc: &StyledTextCtrl) {
+    let dc = AutoBufferedPaintDC::new(panel);
+    let Size { width, height } = panel.get_client_size();
+    dc.set_background(rgb(GUTTER_BG));
+    dc.clear();
+    dc.set_pen(rgb(0x9e9e9e), 1, PenStyle::Solid);
+    dc.draw_line(0, height - 1, width, height - 1);
+
+    // 目盛りの数字は UI フォント (設定のフォントはエディタの中身だけ)。ズームには追従する
+    let Some(label_font) = theme::ui_font(false, false, stc.get_zoom() - 2) else {
+        return;
+    };
+    dc.set_font(&label_font);
+    dc.set_text_foreground(rgb(GUTTER_FG));
+
+    // 列 0 の x 座標 (横スクロールしていれば負になる) と 1 列の幅
+    let first_doc = scintilla::doc_line_from_visible(stc, scintilla::first_visible_line(stc));
+    let origin = scintilla::point_x_from_position(stc, stc.position_from_line(first_doc));
+    let unit = scintilla::text_width(stc, editor::STYLE_DEFAULT, "0").max(1);
+    let right = stc.get_client_size().width.min(width);
+
+    // 画面左にはみ出している列は飛ばす
+    let mut col = if origin < 0 {
+        (-origin + unit - 1) / unit
+    } else {
+        0
+    };
+    dc.set_pen(rgb(0x6a6a6a), 1, PenStyle::Solid);
+    loop {
+        let x = origin + col * unit;
+        if x >= right {
+            break;
+        }
+        // 10 列ごとに長い目盛りと数字、5 列ごとに中、それ以外は短い目盛り
+        let len = if col % 10 == 0 {
+            height / 2
+        } else if col % 5 == 0 {
+            height / 3
+        } else {
+            height / 6
+        };
+        dc.draw_line(x, height - 1 - len, x, height - 1);
+        if col % 10 == 0 && col > 0 {
+            let label = col.to_string();
+            let (tw, _) = dc.get_text_extent(&label);
+            dc.draw_text(&label, x - tw / 2, 0);
+        }
+        col += 1;
+    }
+
+    // キャレット位置の黒いマーカー (下半分、幅 5px)
+    let caret_x = scintilla::point_x_from_position(stc, stc.get_current_pos());
+    if caret_x >= 0 && caret_x < right {
+        dc.set_pen(rgb(editor::SEPARATOR_COLOR), 1, PenStyle::Solid);
+        dc.set_brush(rgb(editor::SEPARATOR_COLOR), BrushStyle::Solid);
+        dc.draw_rectangle(caret_x - 2, height / 2, 5, height - 1 - height / 2);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 右側の行番号
+// ---------------------------------------------------------------------------
+
+/// エディタ右側の行番号。左の行番号マージンと同じ配色・桁幅で、左端に 1px の境界線を引く。
+/// 未保存の編集行は太字にして右端にオレンジの帯、保存済みの編集行は青の帯を出す
+/// (設定 `highlight_changes`)。
+#[derive(Clone)]
+pub struct RightGutter {
+    panel: Panel,
+    container: Panel,
+    stc: StyledTextCtrl,
+}
+
+impl RightGutter {
+    pub fn new(container: &Panel, stc: StyledTextCtrl) -> Self {
+        let width = gutter_width(&stc, &settings::get());
+        let panel = drawing_panel(container, Size::new(width, -1));
+        panel.on_paint({
+            let panel = panel;
+            move |_| paint_gutter(&panel, &stc)
+        });
+        Self {
+            panel,
+            container: *container,
+            stc,
+        }
+    }
+
+    pub fn window(&self) -> &Panel {
+        &self.panel
+    }
+
+    /// 幅を桁数・ズームに合わせてから再描画する
+    pub fn refresh(&self) {
+        let w = gutter_width(&self.stc, &settings::get());
+        if self.panel.get_min_size().width != w {
+            self.panel.set_min_size(Size::new(w, -1));
+            self.container.layout();
+        }
+        self.panel.refresh(false, None);
+    }
+}
+
+fn strip_width(settings: &Settings) -> i32 {
+    if settings.editor.highlight_changes {
+        CHANGE_STRIP_WIDTH
+    } else {
+        0
+    }
+}
+
+/// 境界線 1px + 左余白 4px + 数字 + 右余白 3px (+ 帯と余白)
+fn gutter_width(stc: &StyledTextCtrl, settings: &Settings) -> i32 {
+    let strip = strip_width(settings);
+    1 + 4
+        + editor::digits(stc) * editor::digit_width(stc)
+        + 3
+        + if strip > 0 { strip + 2 } else { 0 }
+}
+
+fn paint_gutter(panel: &Panel, stc: &StyledTextCtrl) {
+    let dc = AutoBufferedPaintDC::new(panel);
+    let Size { width, height } = panel.get_client_size();
+    dc.set_background(rgb(GUTTER_BG));
+    dc.clear();
+    dc.set_pen(rgb(editor::SEPARATOR_COLOR), 1, PenStyle::Solid);
+    dc.draw_line(0, 0, 0, height);
+
+    let settings = settings::get();
+    let zoom = stc.get_zoom();
+    // 行番号は UI フォント (設定のフォントはエディタの中身だけ)。ズームには追従する
+    let (Some(normal), Some(bold)) = (
+        theme::ui_font(false, false, zoom),
+        theme::ui_font(true, false, zoom),
+    ) else {
+        return;
+    };
+    let strip = strip_width(&settings);
+    let right_pad = 3 + if strip > 0 { strip + 2 } else { 0 };
+
+    let first_visible = scintilla::first_visible_line(stc);
+    let last_line = stc.get_line_count() - 1;
+    let first_doc = scintilla::doc_line_from_visible(stc, first_visible);
+    let last_doc =
+        scintilla::doc_line_from_visible(stc, first_visible + scintilla::lines_on_screen(stc))
+            .min(last_line);
+
+    for line in first_doc..=last_doc {
+        let y = scintilla::point_y_from_position(stc, stc.position_from_line(line));
+        if y >= height {
+            break;
+        }
+        let line_h = scintilla::text_height(stc, line);
+        let change = if strip > 0 {
+            editor::line_change(stc, line)
+        } else {
+            LineChange::Unchanged
+        };
+        let strip_colour = match change {
+            LineChange::Modified => Some(editor::MODIFIED_COLOR),
+            LineChange::Saved => Some(editor::SAVED_COLOR),
+            LineChange::Unchanged => None,
+        };
+        if let Some(colour) = strip_colour {
+            let rows = scintilla::wrap_count(stc, line).max(1);
+            dc.set_pen(rgb(colour), 1, PenStyle::Solid);
+            dc.set_brush(rgb(colour), BrushStyle::Solid);
+            dc.draw_rectangle(width - strip, y, strip, line_h * rows);
+        }
+        let (font, fg) = match change {
+            LineChange::Modified => (&bold, GUTTER_FG_MODIFIED),
+            LineChange::Saved => (&normal, GUTTER_FG_SAVED),
+            LineChange::Unchanged => (&normal, GUTTER_FG),
+        };
+        dc.set_font(font);
+        dc.set_text_foreground(rgb(fg));
+        let label = (line + 1).to_string();
+        let (tw, _) = dc.get_text_extent(&label);
+        dc.draw_text(&label, width - right_pad - tw, y);
+    }
+}

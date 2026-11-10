@@ -1,0 +1,163 @@
+# バージョンタグ (v1.2.3) を push すると各 OS 向けにビルドして GitHub Release に登録する
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  check-version:
+    name: Cargo.toml のバージョンとタグの一致を確認
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          cargo_ver=$(grep -m1 -E '^version\s*=' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "tag=$tag cargo=$cargo_ver"
+          if [ "$tag" != "$cargo_ver" ]; then
+            echo "::error::タグ v$tag と Cargo.toml の version ($cargo_ver) が一致しません"
+            exit 1
+          fi
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build (${{ matrix.name }})
+    needs: check-version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            os: windows-latest
+          - name: linux-x86_64
+            os: ubuntu-22.04
+          - name: macos-aarch64
+            os: macos-latest
+          - name: macos-x86_64
+            os: macos-15-intel
+    env:
+      VERSION: ${{ needs.check-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libclang-dev \
+            libgtk-3-dev libpng-dev libjpeg-dev libtiff-dev libexpat1-dev zlib1g-dev \
+            libgl1-mesa-dev libglu1-mesa-dev libxkbcommon-dev libwayland-dev \
+            libxtst-dev libsm-dev libice-dev libnotify-dev \
+            libwebkit2gtk-4.1-dev libsoup-3.0-dev
+
+      # Windows は MinGW-w64 (GNU ツールチェーン)。ローカルの build.cmd / Code::Blocks 25.03 と同じ WinLibs ビルド
+      - name: Install MinGW-w64 (WinLibs, same build as Code::Blocks 25.03)
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/setup-mingw
+
+      - name: Install Rust (Linux / macOS)
+        if: runner.os != 'Windows'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust (Windows, GNU toolchain)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal --no-self-update
+          Add-Content $env:GITHUB_ENV "RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path target/release/Typball.exe, README.md, LICENSE, THIRD-PARTY-NOTICES.txt `
+            -DestinationPath "dist/typball-$env:VERSION-${{ matrix.name }}.zip"
+
+      # インストーラー (Inno Setup はランナーに同梱)。出力は installer/typball.iss の OutputDir (dist/)
+      - name: Package (Windows installer)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$env:VERSION" installer\typball.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem dist
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist stage
+          cp target/release/Typball README.md LICENSE THIRD-PARTY-NOTICES.txt stage/
+          tar -C stage -czf "dist/typball-$VERSION-${{ matrix.name }}.tar.gz" .
+
+      - name: Package (macOS .app)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist "stage/Typball.app/Contents/MacOS" "stage/Typball.app/Contents/Resources"
+          cp target/release/Typball "stage/Typball.app/Contents/MacOS/Typball"
+          cp crates/typball/assets/icons/Typball.icns "stage/Typball.app/Contents/Resources/Typball.icns"
+          cat > "stage/Typball.app/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleName</key><string>Typball</string>
+            <key>CFBundleDisplayName</key><string>Typball</string>
+            <key>CFBundleIdentifier</key><string>io.github.typball.typball</string>
+            <key>CFBundleVersion</key><string>$VERSION</string>
+            <key>CFBundleShortVersionString</key><string>$VERSION</string>
+            <key>CFBundleExecutable</key><string>Typball</string>
+            <key>CFBundleIconFile</key><string>Typball</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict></plist>
+          PLIST
+          cp README.md LICENSE THIRD-PARTY-NOTICES.txt stage/
+          tar -C stage -czf "dist/typball-$VERSION-${{ matrix.name }}.tar.gz" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.name }}
+          path: dist/*
+
+  release:
+    name: GitHub Release を作成
+    needs: [check-version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      # アプリの自動更新がダウンロード後に照合するハッシュ一覧 (ファイル名は update.rs と合わせる)
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Typball v${{ needs.check-version.outputs.version }}
+          files: dist/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
