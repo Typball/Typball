@@ -240,11 +240,9 @@ fn build_window(position: Option<Point>) -> WindowRef {
     let settings = settings::get();
     let offset = all_windows().len() as i32 * 30;
 
-    // ウィンドウは位置・サイズ・中身をすべて決めてから表示する (起動時のちらつき防止)
-    let mut builder = Frame::builder().with_title("Typball").with_size(Size::new(
-        settings.window.width.max(400),
-        settings.window.height.max(300),
-    ));
+    // ウィンドウは位置・サイズ・中身をすべて決めてから表示する (起動時のちらつき防止)。
+    // サイズは作ったあと、置き先のモニターの拡大率で DIP から換算して当てる (winplace::restore)
+    let mut builder = Frame::builder().with_title("Typball");
     let saved_position = match (settings.window.x, settings.window.y) {
         (Some(x), Some(y)) => Some(Point::new(x + offset, y + offset)),
         _ => None,
@@ -254,6 +252,7 @@ fn build_window(position: Option<Point>) -> WindowRef {
         builder = builder.with_position(p);
     }
     let frame = builder.build();
+    crate::winplace::restore(&frame, &settings.window, position);
     crate::appicon::apply(&frame);
     let status = frame.create_status_bar(
         STATUS_FIELD_WIDTHS.len() as i32,
@@ -406,9 +405,6 @@ fn build_window(position: Option<Point>) -> WindowRef {
     timer.start(EXTERNAL_CHECK_MS, false);
     win.borrow_mut()._timer = Some(timer);
 
-    if position.is_none() {
-        frame.centre();
-    }
     if settings.window.maximized && offset == 0 && position.is_none() {
         frame.maximize(true);
     }
@@ -1712,15 +1708,7 @@ fn show_about(frame: &Frame) {
 /// ウィンドウを閉じるときに位置とサイズを保存する (最後に閉じたウィンドウのものが残る)
 fn save_window_geometry(frame: &Frame) {
     let mut s = settings::get();
-    s.window.maximized = frame.is_maximized();
-    if !s.window.maximized {
-        let size = frame.get_size();
-        let pos = frame.get_position();
-        s.window.width = size.width;
-        s.window.height = size.height;
-        s.window.x = Some(pos.x);
-        s.window.y = Some(pos.y);
-    }
+    crate::winplace::save(frame, &mut s.window);
     settings::set(s.clone());
     let _ = s.save();
 }

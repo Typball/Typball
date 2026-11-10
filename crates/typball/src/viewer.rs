@@ -96,13 +96,9 @@ pub fn open_one(path: &Path) -> Option<Rc<Viewer>> {
 impl Viewer {
     fn new(doc: Document, text: String) -> Rc<Viewer> {
         let settings = settings::get();
-        let frame = Frame::builder()
-            .with_title(&window_title(&doc))
-            .with_size(Size::new(
-                settings.window.width.max(400),
-                settings.window.height.max(300),
-            ))
-            .build();
+        let frame = Frame::builder().with_title(&window_title(&doc)).build();
+        // メインウィンドウと同じ大きさ (DIP) で、画面の中央に出す
+        crate::winplace::restore(&frame, &settings.window, None);
         crate::appicon::apply(&frame);
         let status = frame.create_status_bar(1, STATUS_BAR_STYLE, -1, "status");
         let _ = status;

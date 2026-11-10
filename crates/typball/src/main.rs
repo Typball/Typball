@@ -68,6 +68,7 @@ mod webpreview;
 #[cfg(all(windows, target_env = "gnu"))]
 mod webview2_loader;
 mod window;
+mod winplace;
 
 use std::path::PathBuf;
 

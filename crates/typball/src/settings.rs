@@ -506,28 +506,18 @@ pub struct FileTypes {
     pub typ: PanesOverride,
 }
 
-/// メインウィンドウの位置とサイズ (終了時に保存し、次回起動時に復元する)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// メインウィンドウの位置とサイズ (終了時に保存し、次回起動時に復元する。winplace.rs)
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Window {
-    pub width: i32,
-    pub height: i32,
-    /// 未保存なら None (画面中央に出す)
+    /// 幅と高さは DIP (拡大率 100% 換算)。復元時に置き先のモニターの拡大率で換算する。
+    /// 未保存 (初回起動) なら None: 置き先のモニターの作業領域の縦横半分にする
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    /// 画面の座標 (実ピクセル)。未保存なら None (画面中央に出す)
     pub x: Option<i32>,
     pub y: Option<i32>,
     pub maximized: bool,
-}
-
-impl Default for Window {
-    fn default() -> Self {
-        Self {
-            width: 1200,
-            height: 800,
-            x: None,
-            y: None,
-            maximized: false,
-        }
-    }
 }
 
 /// 設定ファイルのパス。
