@@ -23,6 +23,8 @@ pub const SYSTEM: &str = "system";
 
 struct Catalog {
     strings: HashMap<String, String>,
+    /// 解決済みの言語コード ("ja" / "en")
+    code: &'static str,
 }
 
 static CATALOG: RwLock<Option<Catalog>> = RwLock::new(None);
@@ -69,7 +71,17 @@ pub fn set_language(setting: &str) {
             strings.extend(parse(src));
         }
     }
-    *CATALOG.write().unwrap() = Some(Catalog { strings });
+    *CATALOG.write().unwrap() = Some(Catalog { strings, code });
+}
+
+/// 今の言語コード ("ja" / "en")。言語ファイルを読む前なら既定の言語
+pub fn current_language() -> &'static str {
+    CATALOG
+        .read()
+        .unwrap()
+        .as_ref()
+        .map(|c| c.code)
+        .unwrap_or(LOCALES[0].0)
 }
 
 /// キーに対応する文字列を返す

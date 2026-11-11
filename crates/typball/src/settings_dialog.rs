@@ -12,11 +12,12 @@ use std::rc::Rc;
 use wxdragon::id::{ID_CANCEL, ID_HIGHEST, ID_OK};
 use wxdragon::prelude::*;
 
+use crate::fileio::Encoding;
 use crate::filetype::FileType;
 use crate::i18n::{self, tr, tr_args};
 use crate::settings::{
     self, BottomWidth, Channel, ExternalChange, InstanceMode, LastTab, LineNumbers, MarkdownMode,
-    OpenMode, Panes, PanesOverride, SavedChanges, Settings, Theme, Wrap,
+    OpenMode, Panes, PanesOverride, SaveMethod, SavedChanges, Settings, Theme, Wrap,
 };
 
 /// OK が押されたときに呼ばれる読み戻し処理の集まり
@@ -207,6 +208,33 @@ fn form_grid(panel: &Panel) -> FlexGridSizer {
 
 fn label(parent: &Panel, key: &str) -> StaticText {
     StaticText::builder(parent).with_label(&tr(key)).build()
+}
+
+/// フォントサイズの入力欄と、その右の「既定のフォント・サイズに戻す」ボタンを並べた行。
+/// ボタンはフォント名とサイズの両方を既定値 (`face` / `size`) に戻す (エディタとプレビューで共通)
+fn font_size_row(
+    panel: &Panel,
+    font_face: ComboBox,
+    font_size: SpinCtrl,
+    face: String,
+    size: i32,
+) -> BoxSizer {
+    let reset = Button::builder(panel)
+        .with_label(&tr("settings.editor.font_reset"))
+        .build();
+    reset.on_click(move |_| {
+        font_face.set_value(&face);
+        font_size.set_value(size);
+    });
+    let row = BoxSizer::builder(Orientation::Horizontal).build();
+    row.add(&font_size, 0, SizerFlag::AlignCenterVertical, 0);
+    row.add(
+        &reset,
+        0,
+        SizerFlag::AlignCenterVertical | SizerFlag::Left,
+        panel.from_dip_int(GAP),
+    );
+    row
 }
 
 /// 選択肢を入れた Choice を作る。項目は描画を止めてから入れる (wx は項目を 1 つ入れるたびに
@@ -506,7 +534,19 @@ fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog
         LABEL_FLAGS,
         0,
     );
-    grid.add(&font_size, 0, SizerFlag::AlignLeft, 0);
+    let defaults = settings::Editor::default();
+    grid.add_sizer(
+        &font_size_row(
+            panel,
+            font_face,
+            font_size,
+            defaults.font_face,
+            defaults.font_size,
+        ),
+        0,
+        SizerFlag::AlignLeft,
+        0,
+    );
 
     let tab_width = SpinCtrl::builder(panel)
         .with_range(1, 16)
@@ -691,15 +731,105 @@ fn page_files(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog:
     );
     grid.add(&external, 0, SizerFlag::AlignLeft, 0);
 
+    // 保存のしかた: 一時ファイルと入れ替える / 直接書き込む
+    let save_method = choice_with(
+        panel,
+        SaveMethod::ALL
+            .iter()
+            .map(|v| tr(save_method_key(*v)))
+            .collect(),
+    );
+    let selected = SaveMethod::ALL
+        .iter()
+        .position(|v| *v == current.files.save_method)
+        .unwrap_or(0);
+    save_method.set_selection(selected as u32);
+    grid.add(
+        &label(panel, "settings.files.save_method"),
+        0,
+        LABEL_FLAGS,
+        0,
+    );
+    grid.add(&save_method, 0, SizerFlag::AlignLeft, 0);
+
+    // 文字コード: 新規文書の既定と、UTF-8 として読めないときの既定 (先頭は「推定」)
+    let encodings = Encoding::all();
+    let labels: Vec<String> = encodings.iter().map(|e| e.label()).collect();
+    let default_encoding = choice_with(panel, labels.clone());
+    let selected = Encoding::parse(&current.files.default_encoding)
+        .and_then(|e| encodings.iter().position(|x| *x == e))
+        .unwrap_or(0);
+    default_encoding.set_selection(selected as u32);
+    grid.add(
+        &label(panel, "settings.files.default_encoding"),
+        0,
+        LABEL_FLAGS,
+        0,
+    );
+    grid.add(&default_encoding, 0, SizerFlag::AlignLeft, 0);
+
+    let mut fallback_labels = vec![tr("settings.files.fallback_auto")];
+    fallback_labels.extend(labels);
+    let fallback_encoding = choice_with(panel, fallback_labels);
+    let selected = Encoding::parse(&current.files.fallback_encoding)
+        .and_then(|e| encodings.iter().position(|x| *x == e))
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    fallback_encoding.set_selection(selected as u32);
+    grid.add(
+        &label(panel, "settings.files.fallback_encoding"),
+        0,
+        LABEL_FLAGS,
+        0,
+    );
+    grid.add(&fallback_encoding, 0, SizerFlag::AlignLeft, 0);
+
+    // 大きなファイルの扱い (MB)。ラベルが長いので別の表にして、上の選択肢をその幅で右へ押し出さない
+    let size_grid = form_grid(panel);
+    let large_mb = SpinCtrl::builder(panel)
+        .with_range(0, 100_000)
+        .with_initial_value(current.files.large_file_mb as i32)
+        .build();
+    size_grid.add(
+        &label(panel, "settings.files.large_file_mb"),
+        0,
+        LABEL_FLAGS,
+        0,
+    );
+    size_grid.add(&large_mb, 0, SizerFlag::AlignLeft, 0);
+    let max_mb = SpinCtrl::builder(panel)
+        .with_range(0, 100_000)
+        .with_initial_value(current.files.max_file_mb as i32)
+        .build();
+    size_grid.add(
+        &label(panel, "settings.files.max_file_mb"),
+        0,
+        LABEL_FLAGS,
+        0,
+    );
+    size_grid.add(&max_mb, 0, SizerFlag::AlignLeft, 0);
+
     // 新規文書の番号
     let numbering = CheckBox::builder(panel)
         .with_label(&tr("settings.files.untitled_numbering"))
         .with_value(current.files.untitled_numbering)
         .build();
+    // 未保存の文書のスナップショット
+    let recovery = CheckBox::builder(panel)
+        .with_label(&tr("settings.files.recovery_backup"))
+        .with_value(current.files.recovery_backup)
+        .build();
 
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
     sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
+    sizer.add_sizer(
+        &size_grid,
+        0,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
+        px(GAP),
+    );
     sizer.add(&numbering, 0, SizerFlag::Left | SizerFlag::Right, px(GAP));
+    sizer.add(&recovery, 0, SizerFlag::All, px(GAP));
     panel.set_sizer(sizer, true);
 
     readers.push(Box::new(move |s| {
@@ -712,7 +842,25 @@ fn page_files(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog:
             .get_selection()
             .and_then(|i| ExternalChange::ALL.get(i as usize).copied())
             .unwrap_or_default();
+        s.files.save_method = save_method
+            .get_selection()
+            .and_then(|i| SaveMethod::ALL.get(i as usize).copied())
+            .unwrap_or_default();
         s.files.untitled_numbering = numbering.is_checked();
+        s.files.default_encoding = default_encoding
+            .get_selection()
+            .and_then(|i| encodings.get(i as usize))
+            .map(|e| e.id())
+            .unwrap_or_else(|| "utf-8".to_string());
+        s.files.fallback_encoding = fallback_encoding
+            .get_selection()
+            .filter(|i| *i > 0)
+            .and_then(|i| encodings.get(i as usize - 1))
+            .map(|e| e.id())
+            .unwrap_or_else(|| "auto".to_string());
+        s.files.large_file_mb = large_mb.value().max(0) as u32;
+        s.files.max_file_mb = max_mb.value().max(0) as u32;
+        s.files.recovery_backup = recovery.is_checked();
     }));
 }
 
@@ -959,7 +1107,19 @@ fn page_preview(panel: &Panel, current: &Settings, readers: &mut Readers, _dialo
         LABEL_FLAGS,
         0,
     );
-    grid.add(&font_size, 0, SizerFlag::AlignLeft, 0);
+    let defaults = settings::Preview::default();
+    grid.add_sizer(
+        &font_size_row(
+            panel,
+            font_face,
+            font_size,
+            defaults.font_face,
+            defaults.font_size,
+        ),
+        0,
+        SizerFlag::AlignLeft,
+        0,
+    );
     let font_note = StaticText::builder(panel)
         .with_label(&tr("settings.preview.font_note"))
         .build();
@@ -1144,6 +1304,14 @@ fn external_change_key(value: ExternalChange) -> &'static str {
         ExternalChange::Ask => "settings.files.external_change_ask",
         ExternalChange::Reload => "settings.files.external_change_reload",
         ExternalChange::Ignore => "settings.files.external_change_ignore",
+    }
+}
+
+/// 保存のしかたの表示名のキー
+fn save_method_key(value: SaveMethod) -> &'static str {
+    match value {
+        SaveMethod::Atomic => "settings.files.save_method_atomic",
+        SaveMethod::Direct => "settings.files.save_method_direct",
     }
 }
 

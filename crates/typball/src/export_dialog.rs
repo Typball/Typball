@@ -635,7 +635,8 @@ pub fn show(parent: &Frame, source: &Source) -> Option<String> {
                         &out,
                         html_embed.is_checked(),
                     );
-                    match std::fs::write(&out, html) {
+                    let atomic = settings::get().files.save_method.atomic();
+                    match crate::fileio::write_with(&out, html.as_bytes(), atomic) {
                         Ok(()) => {
                             *result.borrow_mut() = Some(tr_args(
                                 "export.done",
@@ -751,8 +752,10 @@ fn export_typst(
     if !confirm(&files) {
         return Ok(None);
     }
+    let atomic = settings::get().files.save_method.atomic();
     for (path, data) in &outputs {
-        std::fs::write(path, data).map_err(|e| format!("{}: {e}", path.display()))?;
+        crate::fileio::write_with(path, data, atomic)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
     }
     Ok(Some(files))
 }

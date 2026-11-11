@@ -185,3 +185,83 @@ wxd_FileDialog_GetCurrentlySelectedFilterIndex(const wxd_FileDialog_t* self)
 #endif
 #endif
 }
+
+// --- Typball patch: a labelled choice inside the file dialog ---
+//
+// wxDragon does not wrap wxFileDialogCustomizeHook. This shows the dialog with one extra
+// drop-down list (on MSW it becomes a combo box in the native dialog, via IFileDialogCustomize)
+// and reports which item was selected when the dialog was accepted.
+
+#include "wx/filedlgcustomize.h"
+#include <vector>
+
+namespace {
+
+class wxdChoiceHook : public wxFileDialogCustomizeHook {
+public:
+    wxdChoiceHook(const wxString& label, const std::vector<wxString>& items, int selection)
+        : m_label(label), m_items(items), m_selection(selection), m_choice(nullptr)
+    {
+    }
+
+    void
+    AddCustomControls(wxFileDialogCustomize& customizer) override
+    {
+        if (m_items.empty())
+            return;
+#ifdef __WXMSW__
+        // wxMSW numbers the items of the first choice downwards from (DWORD)-1, and
+        // IFileDialogCustomize::SetSelectedControlItem silently ignores that ID, so the first
+        // item could never be preselected. A hidden one-item choice takes that ID instead.
+        const wxString placeholder(" ");
+        if (wxFileDialogChoice* dummy = customizer.AddChoice(1, &placeholder))
+            dummy->Hide();
+#endif
+        if (!m_label.empty())
+            customizer.AddStaticText(m_label);
+        m_choice = customizer.AddChoice(m_items.size(), m_items.data());
+        if (m_choice && m_selection >= 0 && m_selection < (int)m_items.size())
+            m_choice->SetSelection(m_selection);
+    }
+
+    void
+    TransferDataFromCustomControls() override
+    {
+        if (m_choice)
+            m_selection = m_choice->GetSelection();
+    }
+
+    int
+    GetSelection() const
+    {
+        return m_selection;
+    }
+
+private:
+    wxString m_label;
+    std::vector<wxString> m_items;
+    int m_selection;
+    wxFileDialogChoice* m_choice;
+};
+
+} // namespace
+
+WXD_EXPORTED int
+wxd_FileDialog_ShowModalWithChoice(wxd_FileDialog_t* self, const char* label,
+                                   const char* const* items, int count, int* selection)
+{
+    if (!self)
+        return wxID_CANCEL;
+    wxFileDialog* dlg = (wxFileDialog*)self;
+    std::vector<wxString> wx_items;
+    for (int i = 0; items && i < count; ++i)
+        wx_items.push_back(WXD_STR_TO_WX_STRING_UTF8_NULL_OK(items[i]));
+    wxdChoiceHook hook(WXD_STR_TO_WX_STRING_UTF8_NULL_OK(label), wx_items,
+                       selection ? *selection : 0);
+    // The hook must outlive ShowModal; it is not used after the dialog closes.
+    dlg->SetCustomizeHook(hook);
+    const int result = dlg->ShowModal();
+    if (selection)
+        *selection = hook.GetSelection();
+    return result;
+}

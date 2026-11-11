@@ -42,6 +42,9 @@ self-replace = "1"
 sha2 = "0.11"
 # 配布物 (zip) から exe を取り出す
 zip = { version = "9", default-features = false, features = ["deflate"] }
+# 文字コード (Shift_JIS / EUC-JP / UTF-16 など) の読み書きと判定 (Firefox と同じもの)
+encoding_rs = "0.8"
+chardetng = "0.1"
 
 [target.'cfg(windows)'.dependencies]
 # WebView2 の自前ローダー (レジストリ・LoadLibrary・CoTaskMemAlloc・バージョン情報、MinGW のみ) と、

@@ -14,20 +14,25 @@
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
+use std::sync::mpsc::TryRecvError;
 
 use wxdragon::id::{ID_ABOUT, ID_EXIT, ID_HIGHEST, ID_NO, ID_OK, ID_SAVE, ID_YES};
 use wxdragon::prelude::*;
 
 use crate::actions::Action;
+use crate::background::{self, Outcome};
+use crate::backup;
 #[cfg(windows)]
 use crate::dnd_win;
-use crate::document::Document;
+use crate::document::{self, Document, SaveTarget};
 use crate::editmenu::{self, EditItem};
+use crate::editor;
+use crate::fileio::{self, DecodeOptions, Encoding};
 use crate::filetype::FileType;
 use crate::i18n::{self, tr, tr_args};
 use crate::settings::{self, ExternalChange, LastTab, LineNumbers, Settings, Wrap};
 use crate::settings_dialog;
-use crate::tab::{status_widths, Tab, TabHost, STATUS_FIELD_WIDTHS};
+use crate::tab::{status_widths, PendingSave, Tab, TabHost, STATUS_FIELD_WIDTHS};
 use crate::tabbar::{DragTarget, TabBar};
 use crate::theme::{self, contains, inflate};
 use crate::toolbar::{ToolBar, ToolItem};
@@ -68,6 +73,16 @@ const ID_GOTO_LINE: i32 = ID_HIGHEST + 39;
 const ID_VIEW_CONSOLE: i32 = ID_HIGHEST + 40;
 const ID_OPEN_VIEWER: i32 = ID_HIGHEST + 41;
 const ID_VIEW_TOOLBAR: i32 = ID_HIGHEST + 42;
+/// 文字コードを指定して開き直す (`Encoding::all` の添字)。
+/// +400 .. は他のモジュール (+60 編集 / +100 アクション / +200 ペイン / +300 更新) と重ならない
+const ID_ENC_REOPEN_BASE: i32 = ID_HIGHEST + 400;
+/// 文字コードの一覧の上限 (ID の範囲)
+const ENC_MAX: i32 = 40;
+/// 未保存の文書のスナップショットは外部変更の監視のタイマー (EXTERNAL_CHECK_MS) の何回に 1 回か。
+/// 別のタイマーにはしない: wxDragon の Timer は ID が wxID_ANY のままなので、同じフレームに 2 つ付けると
+/// 後から束縛したハンドラだけが両方のタイマーのイベントを受け取り、先のものが呼ばれなくなる
+const BACKUP_EVERY_TICKS: u32 = 3;
+const MB: u64 = 1024 * 1024;
 // 編集項目は editmenu.rs (ID_HIGHEST + 60 ..)、アクションは actions.rs (+100 ..)
 
 /// 表示メニューの折り返しの並び (EmEditor と同じ順)
@@ -395,7 +410,16 @@ fn build_window(position: Option<Point>) -> WindowRef {
                 return;
             }
             save_window_geometry(&win.borrow().frame);
+            // 閉じるタブのスナップショットは要らない (未保存の確認は済んでいる)
+            let tabs = win.borrow().tabs.clone();
+            for tab in &tabs {
+                tab.pending_save().borrow_mut().take();
+                backup::remove(tab.backup_id());
+            }
             unregister(&win);
+            if all_windows().is_empty() {
+                backup::discard_own();
+            }
             event.skip(true);
         }
     });
@@ -417,12 +441,20 @@ fn build_window(position: Option<Point>) -> WindowRef {
         .with_on_drag_over(|_, _, _| DragResult::Copy)
         .with_on_drop_files(move |files, _x, _y| on_drop(files))
         .build();
+    // 外部変更の監視 (裏で続いている保存の結果もここで拾う) と、未保存の文書のスナップショット
     let timer = Timer::new(&frame);
     timer.on_tick({
         let weak = weak.clone();
+        let ticks = Cell::new(0u32);
         move |_| {
             if let Some(win) = weak.upgrade() {
+                fileio::debug_log(|| format!("tick {}", ticks.get() + 1));
                 check_external_changes(&win);
+                let n = ticks.get() + 1;
+                ticks.set(n);
+                if n % BACKUP_EVERY_TICKS == 0 {
+                    backup_tick(&win);
+                }
             }
         }
     });
@@ -670,6 +702,18 @@ pub fn build_menu_bar(win: &WindowRef) {
         &tr("menu.help_text.save_as"),
         ItemKind::Normal,
     );
+    // 文字コードを指定して開き直す (読み間違えたとき)。保存時の文字コードは「名前を付けて保存」の
+    // ダイアログで選ぶ
+    let reopen = Menu::builder().build();
+    for (i, e) in Encoding::all().iter().enumerate().take(ENC_MAX as usize) {
+        reopen.append(
+            ID_ENC_REOPEN_BASE + i as i32,
+            &e.label(),
+            &tr("menu.help_text.encoding_reopen"),
+            ItemKind::Normal,
+        );
+    }
+    file.append_submenu(reopen, &tr("menu.encoding_reopen"), "");
     file.append(
         ID_CLOSE_TAB,
         &tr("menu.close_tab"),
@@ -875,6 +919,10 @@ fn update_dynamic_menus(win: &WindowRef) {
         .map(|t| t.doc.borrow().path.is_some())
         .unwrap_or(false);
     bar.enable_item(ID_OPEN_VIEWER, has_path);
+    // 「文字コードを指定して開き直す」は保存済みのファイルだけ
+    for i in 0..Encoding::all().len().min(ENC_MAX as usize) {
+        bar.enable_item(ID_ENC_REOPEN_BASE + i as i32, has_path);
+    }
     if let Some(view) = bar.get_menu(MENU_VIEW) {
         let s = settings::get();
         view.check_item(wrap_id(s.editor.wrap), true);
@@ -961,7 +1009,12 @@ fn handle_menu(win: &WindowRef, id: i32) {
         ID_OPEN => open_dialog(win),
         ID_SAVE | ID_SAVE_AS => {
             if let Some(tab) = current {
-                save_tab(win, &tab, id == ID_SAVE_AS);
+                let mode = if id == ID_SAVE_AS {
+                    SaveMode::SaveAs
+                } else {
+                    SaveMode::Save
+                };
+                save_tab(win, &tab, mode);
             }
         }
         ID_CLOSE_TAB => {
@@ -1079,6 +1132,14 @@ fn handle_menu(win: &WindowRef, id: i32) {
             let ft = FileType::ALL[(id - ID_NEW_TYPE_BASE) as usize];
             new_tab(win, ft, None);
         }
+        id if (ID_ENC_REOPEN_BASE..ID_ENC_REOPEN_BASE + ENC_MAX).contains(&id) => {
+            let encoding = Encoding::all()
+                .get((id - ID_ENC_REOPEN_BASE) as usize)
+                .copied();
+            if let (Some(tab), Some(encoding)) = (current, encoding) {
+                reopen_with_encoding(win, &tab, encoding);
+            }
+        }
         id if (ID_WRAP_BASE..ID_WRAP_BASE + Wrap::ALL.len() as i32).contains(&id) => {
             let wrap = Wrap::ALL[(id - ID_WRAP_BASE) as usize];
             change_settings(win, |s| s.editor.wrap = wrap);
@@ -1174,20 +1235,154 @@ fn reload_tab(win: &WindowRef, tab: &Tab) {
             return;
         }
     }
-    let result = tab.doc.borrow_mut().reload();
-    match result {
-        Ok(text) => {
-            tab.set_text(&text);
-            status(&frame, &tr_args("status.reloaded", &[("name", &name)]));
-        }
-        Err(e) => error_dialog(
+    reload_from_disk(&frame, tab);
+}
+
+/// 文字コードを指定して読み直す (未保存の変更があれば確認する)
+fn reopen_with_encoding(win: &WindowRef, tab: &Tab, encoding: Encoding) {
+    let frame = win.borrow().frame;
+    if tab.doc.borrow().path.is_none() {
+        return;
+    }
+    if tab.is_modified() {
+        let name = tab.doc.borrow().title();
+        if !ask_yes_no(
             &frame,
+            &tr_args("dialog.reload_confirm", &[("name", &name)]),
+        ) {
+            return;
+        }
+    }
+    let previous = tab.doc.borrow().forced_encoding;
+    tab.doc.borrow_mut().forced_encoding = Some(encoding);
+    if !reload_from_disk(&frame, tab) {
+        tab.doc.borrow_mut().forced_encoding = previous;
+    }
+    update_dynamic_menus(win);
+}
+
+/// ディスクから読み直してエディタに入れる (確認はしない)。読めたら true
+fn reload_from_disk(frame: &Frame, tab: &Tab) -> bool {
+    let Some(path) = tab.doc.borrow().path.clone() else {
+        return false;
+    };
+    let settings = settings::get();
+    let options = tab.doc.borrow().reload_options(&settings);
+    let name = tab.doc.borrow().title();
+    let Some(loaded) = load_with_checks(frame, &path, options, &settings) else {
+        return false;
+    };
+    tab.doc.borrow_mut().apply_reloaded(&loaded);
+    tab.set_text(&loaded.text);
+    tab.update_status();
+    status(frame, &tr_args("status.reloaded", &[("name", &name)]));
+    after_load_notices(frame, tab, &loaded);
+    true
+}
+
+/// ファイルを読む前後の確認をまとめて行う: 大きすぎれば断り、大きければ聞き、別スレッドで読み、
+/// バイナリらしければ聞く。開かない (開けない) なら None (ダイアログは出し済み)
+fn load_with_checks(
+    frame: &Frame,
+    path: &Path,
+    options: DecodeOptions,
+    settings: &Settings,
+) -> Option<document::Loaded> {
+    let display = path.display().to_string();
+    let open_error = |e: &dyn std::fmt::Display| {
+        error_dialog(
+            frame,
             &tr_args(
                 "dialog.open_error",
-                &[("path", &name), ("error", &e.to_string())],
+                &[("path", &display), ("error", &e.to_string())],
             ),
-        ),
+        );
+    };
+    let size = match std::fs::metadata(path) {
+        Ok(m) => m.len(),
+        Err(e) => {
+            open_error(&e);
+            return None;
+        }
+    };
+    let max = settings.files.max_file_mb as u64 * MB;
+    if max > 0 && size > max {
+        error_dialog(
+            frame,
+            &tr_args(
+                "dialog.too_large",
+                &[
+                    ("path", &display),
+                    ("size", &(size / MB).to_string()),
+                    ("max", &settings.files.max_file_mb.to_string()),
+                ],
+            ),
+        );
+        return None;
     }
+    let large = settings.files.large_file_mb as u64 * MB;
+    if large > 0
+        && size > large
+        && !ask_yes_no(
+            frame,
+            &tr_args(
+                "dialog.large_file",
+                &[("path", &display), ("size", &(size / MB).to_string())],
+            ),
+        )
+    {
+        return None;
+    }
+    let owned = path.to_path_buf();
+    let outcome = background::run(
+        frame,
+        &tr_args("dialog.busy_open", &[("path", &display)]),
+        &tr("dialog.busy_note"),
+        move || document::load(&owned, options),
+    );
+    let loaded = match outcome {
+        Outcome::Done(Ok(loaded)) => loaded,
+        Outcome::Done(Err(e)) => {
+            open_error(&e);
+            return None;
+        }
+        Outcome::Abandoned(_) => {
+            status(
+                frame,
+                &tr_args("status.open_abandoned", &[("path", &display)]),
+            );
+            return None;
+        }
+    };
+    if loaded.binary && !ask_yes_no(frame, &tr_args("dialog.binary_file", &[("path", &display)])) {
+        return None;
+    }
+    Some(loaded)
+}
+
+/// 開いた (読み直した) 後の知らせ: 置き換え文字が入った・大きなファイルとして開いた
+fn after_load_notices(frame: &Frame, tab: &Tab, loaded: &document::Loaded) {
+    let name = tab.doc.borrow().title();
+    if tab.is_large() {
+        status(frame, &tr_args("status.large_mode", &[("name", &name)]));
+    } else if loaded.lossy {
+        status(
+            frame,
+            &tr_args(
+                "status.lossy_decoded",
+                &[("name", &name), ("encoding", &loaded.doc.encoding.label())],
+            ),
+        );
+    }
+}
+
+/// はい / いいえ の確認
+fn ask_yes_no(frame: &Frame, message: &str) -> bool {
+    MessageDialog::builder(frame, message, "Typball")
+        .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
+        .build()
+        .show_modal()
+        == ID_YES
 }
 
 /// OS のファイルマネージャでフォルダを開く
@@ -1314,29 +1509,54 @@ pub fn open_file(win: &WindowRef, path: &Path) -> Option<Tab> {
         return Some(tab);
     }
     let frame = win.borrow().frame;
-    match Document::open(path) {
-        Ok((doc, text)) => {
-            let blank = win.borrow().current_tab().filter(is_blank);
-            let tab = add_tab(win, doc, &text, false, None);
-            if let Some(blank) = blank {
-                remove_tab(win, &blank);
+    let settings = settings::get();
+    let loaded = load_with_checks(&frame, path, document::decode_options(&settings), &settings)?;
+    let blank = win.borrow().current_tab().filter(is_blank);
+    let tab = add_tab(win, loaded.doc.clone(), &loaded.text, false, None);
+    if let Some(blank) = blank {
+        remove_tab(win, &blank);
+    }
+    after_load_notices(&frame, &tab, &loaded);
+    Some(tab)
+}
+
+/// 前回落ちたときのスナップショットを「未保存の変更あり」のタブとして開く
+pub fn restore_recovered(win: &WindowRef, items: Vec<backup::Recovered>) {
+    if items.is_empty() {
+        return;
+    }
+    let count = items.len();
+    for item in items {
+        let filetype = FileType::from_extension(&item.meta.filetype);
+        let mut doc = match item.meta.path.as_deref().map(PathBuf::from) {
+            Some(path) => {
+                let mut doc = Document::untitled(filetype, 0);
+                doc.set_path(path);
+                // ディスクの (古い) 内容は確認済みの扱い: 読み直すか聞かない
+                doc.acknowledge_external();
+                doc
             }
-            Some(tab)
+            None => Document::untitled(filetype, next_untitled_number()),
+        };
+        if let Some(encoding) = Encoding::parse(&item.meta.encoding) {
+            doc.encoding = encoding;
         }
-        Err(e) => {
-            error_dialog(
-                &frame,
-                &tr_args(
-                    "dialog.open_error",
-                    &[
-                        ("path", &path.display().to_string()),
-                        ("error", &e.to_string()),
-                    ],
-                ),
-            );
-            None
+        let blank = win.borrow().current_tab().filter(is_blank);
+        let tab = add_tab(win, doc, &item.text, true, None);
+        tab.set_backup_dirty();
+        if let Some(blank) = blank {
+            remove_tab(win, &blank);
         }
     }
+    let frame = win.borrow().frame;
+    MessageDialog::builder(
+        &frame,
+        &tr_args("dialog.recovered", &[("n", &count.to_string())]),
+        "Typball",
+    )
+    .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconInformation)
+    .build()
+    .show_modal();
 }
 
 pub fn open_files(win: &WindowRef, paths: &[PathBuf]) {
@@ -1376,79 +1596,379 @@ fn open_dialog(win: &WindowRef) {
     open_files(win, &paths);
 }
 
-/// 保存する。必要なら (無題か「名前を付けて保存」なら) 保存先を聞く。保存できたら true
-fn save_tab(win: &WindowRef, tab: &Tab, save_as: bool) -> bool {
+/// 保存のしかた
+#[derive(Debug, Clone, Copy)]
+enum SaveMode {
+    /// 上書き保存 (無題なら保存先を聞く)
+    Save,
+    /// 名前を付けて保存 (保存先と文字コードを聞く)
+    SaveAs,
+}
+
+/// 生きている間、タイマーの外部変更チェックとスナップショットを休ませる。保存の確認ダイアログの
+/// モーダルループからもタイマーは来るので、休ませないと「読み直しますか?」が上に重なる
+struct ChecksPaused {
+    win: WindowRef,
+    previous: bool,
+}
+
+fn pause_checks(win: &WindowRef) -> ChecksPaused {
+    // 借用できなければ休ませずに進む (保存そのものを止めない)
+    let previous = match win.try_borrow_mut() {
+        Ok(mut w) => std::mem::replace(&mut w.checking, true),
+        Err(_) => false,
+    };
+    ChecksPaused {
+        win: win.clone(),
+        previous,
+    }
+}
+
+impl Drop for ChecksPaused {
+    fn drop(&mut self) {
+        if let Ok(mut w) = self.win.try_borrow_mut() {
+            w.checking = self.previous;
+        }
+    }
+}
+
+/// 保存する。保存できたら true
+///
+/// 「行き先 (パスと文字コード) を決める → バイト列にする → 書く」の順に進み、文書 (`tab.doc`) は
+/// 書き込みが成功してから `finish_save` で変える。途中でやめたり失敗したりしても、文書のパス・
+/// 文字コード・未保存の印は元のまま残る。
+///
+/// 書き込みは別スレッドで行い (`background::run`)、長引けば進捗ダイアログを出す。ユーザーが
+/// 待つのをやめたら `pending_save` に受け口を残し、`poll_pending_saves` が後で結果を拾う。
+fn save_tab(win: &WindowRef, tab: &Tab, mode: SaveMode) -> bool {
     let frame = win.borrow().frame;
-    let needs_name = save_as || tab.doc.borrow().path.is_none();
-    if needs_name {
-        let (name, dir, filetype) = {
-            let doc = tab.doc.borrow();
-            let dir = doc
-                .path
-                .as_ref()
-                .and_then(|p| p.parent())
-                .map(|d| d.display().to_string());
-            (doc.title(), dir, doc.filetype)
-        };
-        let mut builder = FileDialog::builder(&frame)
-            .with_message(&tr("dialog.save_title"))
-            .with_default_file(&name)
-            .with_wildcard(&filetype.save_wildcard())
-            .with_style(FileDialogStyle::Save | FileDialogStyle::OverwritePrompt);
-        if let Some(dir) = dir {
-            builder = builder.with_default_dir(&dir);
-        }
-        let dialog = builder.build();
-        if dialog.show_modal() != ID_OK {
-            return false;
-        }
-        let Some(path) = dialog.get_path() else {
-            return false;
-        };
-        let mut path = PathBuf::from(path);
-        if path.extension().is_none() {
-            path.set_extension(filetype.extension());
-        }
-        tab.doc.borrow_mut().set_path(path);
+    let name = tab.doc.borrow().title();
+    if tab.pending_save().borrow().is_some() {
+        status(&frame, &tr_args("status.save_pending", &[("path", &name)]));
+        return false;
+    }
+    let _paused = pause_checks(win);
+    let current = tab.doc.borrow().path.clone();
+    // 上書き保存は今の保存先と文字コードのまま。無題と「名前を付けて保存」はダイアログで両方を聞く
+    let (path, encoding) = match (mode, current.clone()) {
+        (SaveMode::Save, Some(path)) => (path, tab.doc.borrow().encoding),
+        _ => match ask_save_target(&frame, tab) {
+            Some(chosen) => chosen,
+            None => return false,
+        },
+    };
+    // 読み込みで置き換え文字が入った文書: 保存すると元のバイト列が失われることを一度は断る
+    let lossy = tab.doc.borrow().lossy;
+    if lossy && !ask_yes_no(&frame, &tr_args("dialog.save_lossy", &[("name", &name)])) {
+        return false;
+    }
+    // 開いた後に別のプログラムが書き換えたファイル: タイマーの確認 (2 秒おき) より先に保存が来ると
+    // 黙って上書きしてしまうので、ここでも確かめる
+    let same_file = current.as_deref() == Some(path.as_path());
+    let overwritten = same_file && tab.doc.borrow().overwritten_externally();
+    if overwritten
+        && !ask_yes_no(
+            &frame,
+            &tr_args("dialog.overwrite_external", &[("name", &name)]),
+        )
+    {
+        return false;
     }
     let text = tab.text();
-    let result = tab.doc.borrow_mut().save(&text);
-    let path = tab.doc.borrow().path.clone().unwrap_or_default();
-    match result {
-        Ok(()) => {
-            tab.mark_saved();
-            tab.filetype_changed();
-            update_dynamic_menus(win);
-            status(
-                &frame,
-                &tr_args("status.saved", &[("path", &path.display().to_string())]),
-            );
+    let Some((bytes, encoding)) = encode_for_save(&frame, tab, &name, &text, encoding) else {
+        return false;
+    };
+    let hash = editor::hash_of(&text);
+    drop(text);
+    let target = SaveTarget { path, encoding };
+    let display = target.path.display().to_string();
+    let dest = target.path.clone();
+    // 設定はスレッドローカルなので、書き込みのスレッドに渡す前に読んでおく
+    let atomic = settings::get().files.save_method.atomic();
+    // 注意書きは保存のしかたで変える: 入れ替えなら途中で止まっても元は残る、直接書き込みなら残らない
+    let note = format!(
+        "{}\n{}",
+        tr("dialog.busy_note"),
+        tr(if atomic {
+            "dialog.busy_note_atomic"
+        } else {
+            "dialog.busy_note_direct"
+        })
+    );
+    let outcome = background::run(
+        &frame,
+        &tr_args("dialog.busy_save", &[("path", &display)]),
+        &note,
+        move || fileio::write_with(&dest, &bytes, atomic),
+    );
+    match outcome {
+        Outcome::Done(Ok(())) => {
+            finish_save(win, tab, &target);
             true
         }
-        Err(e) => {
-            error_dialog(
+        Outcome::Done(Err(e)) => {
+            save_error(&frame, &display, &e);
+            false
+        }
+        Outcome::Abandoned(receiver) => {
+            *tab.pending_save().borrow_mut() = Some(PendingSave {
+                receiver,
+                hash,
+                target,
+            });
+            status(
                 &frame,
-                &tr_args(
-                    "dialog.save_error",
-                    &[
-                        ("path", &path.display().to_string()),
-                        ("error", &e.to_string()),
-                    ],
-                ),
+                &tr_args("status.save_abandoned", &[("path", &display)]),
             );
             false
         }
     }
 }
 
+/// 保存先と文字コードを聞く (無題の文書と「名前を付けて保存」)。保存ダイアログの中に文字コードの
+/// 選択リストがあり、最初は今の文字コードが選ばれている。拡張子が無ければ文書の種別のものを付ける
+fn ask_save_target(frame: &Frame, tab: &Tab) -> Option<(PathBuf, Encoding)> {
+    let (name, dir, filetype, current) = {
+        let doc = tab.doc.borrow();
+        let dir = doc
+            .path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(|d| d.display().to_string());
+        (doc.title(), dir, doc.filetype, doc.encoding)
+    };
+    // 一覧に無い文字コード (BOM 無しの UTF-16 や、推定で出た珍しいもの) はそのまま保てるように足す
+    let mut encodings = Encoding::all();
+    let selected = match encodings.iter().position(|e| *e == current) {
+        Some(i) => i,
+        None => {
+            encodings.insert(0, current);
+            0
+        }
+    };
+    let labels: Vec<String> = encodings.iter().map(|e| e.label()).collect();
+    let mut builder = FileDialog::builder(frame)
+        .with_message(&tr("dialog.save_title"))
+        .with_default_file(&name)
+        .with_wildcard(&filetype.save_wildcard())
+        .with_style(FileDialogStyle::Save | FileDialogStyle::OverwritePrompt);
+    if let Some(dir) = dir {
+        builder = builder.with_default_dir(&dir);
+    }
+    let dialog = builder.build();
+    let (result, chosen) = crate::filedialog::show_modal_with_choice(
+        &dialog,
+        &tr("dialog.save_encoding"),
+        &labels,
+        selected,
+    );
+    if result != ID_OK {
+        return None;
+    }
+    let mut path = PathBuf::from(dialog.get_path()?);
+    if path.extension().is_none() {
+        path.set_extension(filetype.extension());
+    }
+    Some((path, encodings.get(chosen).copied().unwrap_or(current)))
+}
+
+/// テキストを保存用のバイト列にする。その文字コードで表せない文字があれば、どの文字かを示して
+/// UTF-8 に切り替えるか聞く。やめたら None (表せない文字を選択して、直せるようにする)
+fn encode_for_save(
+    frame: &Frame,
+    tab: &Tab,
+    name: &str,
+    text: &str,
+    encoding: Encoding,
+) -> Option<(Vec<u8>, Encoding)> {
+    let bad = match fileio::encode(text, encoding) {
+        Ok(bytes) => return Some((bytes, encoding)),
+        Err(bad) => bad,
+    };
+    let line = tab.stc.line_from_position(bad.offset as i32) + 1;
+    let switch = ask_yes_no(
+        frame,
+        &tr_args(
+            "dialog.unencodable",
+            &[
+                ("name", name),
+                ("encoding", &encoding.label()),
+                ("line", &line.to_string()),
+                ("char", &bad.ch.to_string()),
+                ("code", &format!("U+{:04X}", bad.ch as u32)),
+            ],
+        ),
+    );
+    if !switch {
+        let start = bad.offset as i32;
+        tab.stc
+            .set_selection(start, start + bad.ch.len_utf8() as i32);
+        tab.stc.set_focus();
+        return None;
+    }
+    // UTF-8 はどの文字も表せる
+    let utf8 = Encoding::UTF8;
+    fileio::encode(text, utf8).ok().map(|bytes| (bytes, utf8))
+}
+
+fn save_error(frame: &Frame, path: &str, e: &std::io::Error) {
+    error_dialog(
+        frame,
+        &tr_args(
+            "dialog.save_error",
+            &[("path", path), ("error", &e.to_string())],
+        ),
+    );
+}
+
+/// `target` に書けた: 保存先と文字コードを文書に反映する。未保存の印には触らない
+fn apply_saved_target(tab: &Tab, target: &SaveTarget) {
+    let moved = tab.doc.borrow_mut().saved_to(target);
+    if moved {
+        // 別の名前で保存した: 色分け・ペイン・アクションバーを種別に合わせ直し、プレビューを
+        // 新しい場所を基準に組み直す。同じファイルへの上書きでは要らない (全文の引き直しは重い)
+        tab.filetype_changed();
+    }
+}
+
+/// 書き込みが成功した後の後始末: 文書への反映・保存済みの印・スナップショット・メニュー・ステータス
+fn finish_save(win: &WindowRef, tab: &Tab, target: &SaveTarget) {
+    let previous = tab.doc.borrow().encoding;
+    apply_saved_target(tab, target);
+    tab.mark_saved();
+    tab.update_status();
+    if tab.backup_written().replace(false) {
+        backup::remove(tab.backup_id());
+    }
+    update_dynamic_menus(win);
+    let frame = win.borrow().frame;
+    let path = target.path.display().to_string();
+    let message = if previous == target.encoding {
+        tr_args("status.saved", &[("path", &path)])
+    } else {
+        // 文字コードを変えて保存した (保存ダイアログで選んだ、または表せない文字があって UTF-8 にした)
+        tr_args(
+            "status.saved_encoding",
+            &[("path", &path), ("encoding", &target.encoding.label())],
+        )
+    };
+    status(&frame, &message);
+}
+
+/// 待つのをやめた保存が終わっていれば結果を反映する (外部変更の監視と同じタイマーから)
+fn poll_pending_saves(win: &WindowRef, frame: &Frame, tabs: &[Tab]) {
+    for tab in tabs {
+        let finished = {
+            let mut slot = tab.pending_save().borrow_mut();
+            let Some(pending) = slot.as_ref() else {
+                continue;
+            };
+            let received = pending.receiver.try_recv();
+            fileio::debug_log(|| format!("pending save poll: {received:?}"));
+            let result = match received {
+                Ok(result) => result,
+                Err(TryRecvError::Empty) => continue,
+                Err(TryRecvError::Disconnected) => {
+                    Err(std::io::Error::other("the save thread stopped"))
+                }
+            };
+            slot.take().map(|pending| (result, pending))
+        };
+        let Some((result, pending)) = finished else {
+            continue;
+        };
+        let name = tab.doc.borrow().title();
+        match result {
+            Ok(()) if editor::hash_of(&tab.text()) == pending.hash => {
+                finish_save(win, tab, &pending.target)
+            }
+            Ok(()) => {
+                // ディスクには書けたが、その後に編集されている: 保存先だけ反映して未保存のままにする
+                // (ファイルの状態を取り直すので、自分の書き込みを外部変更とは扱わない)
+                apply_saved_target(tab, &pending.target);
+                tab.update_title();
+                tab.update_status();
+                update_dynamic_menus(win);
+                status(
+                    frame,
+                    &tr_args("status.save_finished_edited", &[("name", &name)]),
+                );
+            }
+            Err(e) => save_error(frame, &pending.target.path.display().to_string(), &e),
+        }
+    }
+}
+
+/// 未保存の文書のスナップショットを書く (数秒ごと)。保存済み (未変更) に戻ったタブのものは消す
+fn backup_tick(win: &WindowRef) {
+    if background::is_waiting() {
+        return;
+    }
+    let Ok(w) = win.try_borrow() else {
+        return;
+    };
+    if w.checking {
+        return;
+    }
+    let tabs = w.tabs.clone();
+    drop(w);
+    let settings = settings::get();
+    if !settings.files.recovery_backup {
+        return;
+    }
+    // 前回の書き込みが失敗していたら、その文書は次に書き直す
+    if let Some(failed) = backup::take_failed() {
+        if let Some(tab) = tabs.iter().find(|t| t.backup_id() == failed) {
+            tab.set_backup_dirty();
+        }
+    }
+    for tab in tabs {
+        if !tab.is_modified() || tab.is_large() {
+            if tab.backup_written().replace(false) {
+                backup::remove(tab.backup_id());
+            }
+            continue;
+        }
+        // 別スレッドの書き込みは 1 つずつ。走っていれば次の tick で
+        if backup::is_writing() || !tab.take_backup_dirty() {
+            continue;
+        }
+        let meta = {
+            let doc = tab.doc.borrow();
+            backup::Meta {
+                path: doc.path.as_ref().map(|p| p.display().to_string()),
+                filetype: doc.filetype.extension().to_string(),
+                encoding: doc.encoding.id(),
+                untitled: doc.untitled,
+            }
+        };
+        fileio::debug_log(|| format!("snapshot {} queued", tab.backup_id()));
+        if backup::write_async(tab.backup_id(), tab.text(), meta) {
+            tab.backup_written().set(true);
+        } else {
+            tab.set_backup_dirty();
+        }
+    }
+}
+
 /// 未保存なら保存するか確認する。続行してよければ true
 fn confirm_discard(win: &WindowRef, tab: &Tab) -> bool {
-    if !tab.is_modified() {
+    let pending = tab.pending_save().borrow().is_some();
+    if !pending && !tab.is_modified() {
         return true;
     }
     let frame = win.borrow().frame;
     if let Some(i) = tab.index() {
         select_tab(win, i);
+    }
+    if pending {
+        // 待つのをやめた保存が裏で続いている。タブを閉じても書き込みは続くが、Typball が終了すると
+        // 途中で止まる (直接書き込みならファイルが壊れる) ので、閉じてよいかを聞く
+        let name = tab.doc.borrow().title();
+        return ask_yes_no(
+            &frame,
+            &tr_args("dialog.close_pending_save", &[("name", &name)]),
+        );
     }
     let message = tr_args(
         "dialog.save_changes",
@@ -1462,7 +1982,7 @@ fn confirm_discard(win: &WindowRef, tab: &Tab) -> bool {
         )
         .build();
     match dialog.show_modal() {
-        ID_YES => save_tab(win, tab, false),
+        ID_YES => save_tab(win, tab, SaveMode::Save),
         ID_NO => true,
         _ => false,
     }
@@ -1493,6 +2013,9 @@ fn close_tab(win: &WindowRef, tab: &Tab) -> bool {
 
 /// 確認なしにタブを外して破棄する
 fn remove_tab(win: &WindowRef, tab: &Tab) {
+    if tab.backup_written().replace(false) {
+        backup::remove(tab.backup_id());
+    }
     {
         let mut w = win.borrow_mut();
         if let Some(i) = w.index_of(tab) {
@@ -1661,24 +2184,33 @@ fn export(win: &WindowRef) {
 
 /// 開いているファイルが外部で変わっていないか調べ、設定に従って読み直す・確認する・知らせる
 fn check_external_changes(win: &WindowRef) {
+    // 読み書きの進捗ダイアログで待っている間 (そのモーダルループからタイマーが来る) は何もしない
+    if background::is_waiting() {
+        fileio::debug_log(|| "external check skipped: waiting".to_string());
+        return;
+    }
     let Ok(w) = win.try_borrow() else {
+        fileio::debug_log(|| "external check skipped: window borrowed".to_string());
         return;
     };
     if w.checking {
+        fileio::debug_log(|| "external check skipped: already checking".to_string());
         return;
     }
     let tabs = w.tabs.clone();
     let frame = w.frame;
     drop(w);
+    win.borrow_mut().checking = true;
+    poll_pending_saves(win, &frame, &tabs);
     let mode = settings::get().files.external_change;
     for tab in tabs {
-        if !tab.doc.borrow().changed_externally() {
+        // 自分の保存が裏で続いているタブは、その書き込みを外部変更と見ない
+        if tab.pending_save().borrow().is_some() || !tab.doc.borrow().changed_externally() {
             continue;
         }
-        win.borrow_mut().checking = true;
         handle_external_change(&frame, &tab, mode);
-        win.borrow_mut().checking = false;
     }
+    win.borrow_mut().checking = false;
 }
 
 fn handle_external_change(frame: &Frame, tab: &Tab, mode: ExternalChange) {
@@ -1718,20 +2250,7 @@ fn handle_external_change(frame: &Frame, tab: &Tab, mode: ExternalChange) {
         );
         return;
     }
-    let result = tab.doc.borrow_mut().reload();
-    match result {
-        Ok(text) => {
-            tab.set_text(&text);
-            status(frame, &tr_args("status.reloaded", &[("name", &name)]));
-        }
-        Err(e) => error_dialog(
-            frame,
-            &tr_args(
-                "dialog.open_error",
-                &[("path", &name), ("error", &e.to_string())],
-            ),
-        ),
-    }
+    reload_from_disk(frame, tab);
 }
 
 // ---------------------------------------------------------------------------

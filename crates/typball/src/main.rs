@@ -36,12 +36,16 @@
 mod actionbar;
 mod actions;
 mod appicon;
+mod background;
+mod backup;
 #[cfg(windows)]
 mod dnd_win;
 mod document;
 mod editmenu;
 mod editor;
 mod export_dialog;
+mod filedialog;
+mod fileio;
 mod filetype;
 mod findbar;
 mod fonts;
@@ -169,7 +173,15 @@ fn main() {
         // Typst の既定フォント (文書が #set text(font:) で指定しないときに使う)
         typball_core::set_default_text(&loaded.preview.font_face, loaded.preview.font_size as f64);
 
-        let win = open_at_startup(args.mode, args.files, &loaded);
+        let mut win = open_at_startup(args.mode, args.files, &loaded);
+        // 前回落ちた (強制終了した) ときに保存されていなかった文書があれば開き直す
+        if loaded.files.recovery_backup {
+            let recovered = backup::recover();
+            if !recovered.is_empty() {
+                let target = win.get_or_insert_with(|| window::create(&[], None)).clone();
+                window::restore_recovered(&target, recovered);
+            }
+        }
         if let (Some(win), Some(e)) = (&win, load_error) {
             win.borrow()
                 .frame

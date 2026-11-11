@@ -29,6 +29,7 @@ extern "C" {
 
 // Scintilla.h の定数 (使うものだけ)
 pub const SCI_GETFIRSTVISIBLELINE: i32 = 2152;
+pub const SCI_SETEOLMODE: i32 = 2031;
 pub const SCI_BEGINUNDOACTION: i32 = 2078;
 pub const SCI_ENDUNDOACTION: i32 = 2079;
 pub const SCI_GETLINEENDPOSITION: i32 = 2136;
@@ -41,7 +42,10 @@ pub const SCI_VISIBLEFROMDOCLINE: i32 = 2220;
 pub const SCI_DOCLINEFROMVISIBLE: i32 = 2221;
 pub const SCI_SETFIRSTVISIBLELINE: i32 = 2613;
 pub const SCI_WRAPCOUNT: i32 = 2235;
+pub const SCI_GETMARGINTYPEN: i32 = 2241;
 pub const SCI_GETMARGINWIDTHN: i32 = 2243;
+/// SC_MARGIN_NUMBER (Scintilla 自身が行番号を描くマージン)
+pub const SC_MARGIN_NUMBER: isize = 1;
 pub const SCI_SETMARGINMASKN: i32 = 2244;
 pub const SCI_TEXTWIDTH: i32 = 2276;
 pub const SCI_TEXTHEIGHT: i32 = 2279;
@@ -66,6 +70,18 @@ pub const SCFIND_POSIX: i32 = 0x0040_0000;
 pub const SC_MOD_INSERTTEXT: i32 = 0x1;
 pub const SC_MOD_DELETETEXT: i32 = 0x2;
 
+/// Enter で入る改行コードを決める (既にある改行は変えない)
+pub fn set_eol_mode(stc: &StyledTextCtrl, eol: crate::fileio::LineEnding) {
+    use crate::fileio::LineEnding;
+    // SC_EOL_CRLF / SC_EOL_CR / SC_EOL_LF
+    let mode = match eol {
+        LineEnding::Crlf => 0,
+        LineEnding::Cr => 1,
+        LineEnding::Lf => 2,
+    };
+    send(stc, SCI_SETEOLMODE, mode, 0);
+}
+
 /// Scintilla メッセージを送る。エディタが破棄済みなら 0。
 pub fn send(stc: &StyledTextCtrl, msg: i32, wp: usize, lp: isize) -> isize {
     let ptr = stc.handle_ptr();
@@ -75,6 +91,11 @@ pub fn send(stc: &StyledTextCtrl, msg: i32, wp: usize, lp: isize) -> isize {
     // SAFETY: ptr は wxdragon が `new wxStyledTextCtrl` で作ったオブジェクトそのもので
     // (wxWindow は第 1 基底クラスなのでアドレスは一致する)、同じ UI スレッドから呼んでいる。
     unsafe { wx_stc_send_msg(ptr as *const c_void, msg, wp, lp) }
+}
+
+/// マージンの種類 (SC_MARGIN_*)
+pub fn margin_type(stc: &StyledTextCtrl, margin: i32) -> isize {
+    send(stc, SCI_GETMARGINTYPEN, margin as usize, 0)
 }
 
 /// 文字列を lParam で渡すメッセージ

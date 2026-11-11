@@ -47,6 +47,7 @@ use crate::dnd_win;
 use crate::document::Document;
 use crate::editmenu::{self, EditTarget};
 use crate::editor::{self, ChangeTracker};
+use crate::fileio::LineEnding;
 use crate::filetype::FileType;
 use crate::findbar::FindBar;
 use crate::gutter::{RightGutter, Ruler};
@@ -241,6 +242,38 @@ pub struct Tab {
     char_count: Rc<Cell<i32>>,
     /// ペインのヘッダをドラッグしている間だけ存在する行き先の表示
     drop_indicator: Rc<RefCell<Option<DropIndicator>>>,
+    /// 大きなファイル (設定 `files.large_file_mb` 超): 色分け・編集行の強調・アウトライン・
+    /// プレビュー・スナップショットを止めて、変更のたびに全文を取り出さない
+    large: Rc<Cell<bool>>,
+    /// スナップショット (backup.rs) のファイル名。プロセス内で一意
+    backup_id: u64,
+    /// 最後のスナップショットの後に編集があった
+    backup_dirty: Rc<Cell<bool>>,
+    /// スナップショットを書いてある (消すべきものがある)
+    backup_written: Rc<Cell<bool>>,
+    /// 待つのをやめた保存 (裏で続いている)。終わるまで次の保存はしない
+    pending_save: Rc<RefCell<Option<PendingSave>>>,
+}
+
+/// 裏で続いている保存
+pub struct PendingSave {
+    pub receiver: crate::background::Pending<std::io::Result<()>>,
+    /// 保存を始めたときの全文のハッシュ。終わったときに同じなら「保存済み」にできる
+    pub hash: u64,
+    /// 書いている先。書き終えたら文書に反映する
+    pub target: crate::document::SaveTarget,
+}
+
+thread_local! {
+    static NEXT_BACKUP_ID: Cell<u64> = const { Cell::new(1) };
+}
+
+fn next_backup_id() -> u64 {
+    NEXT_BACKUP_ID.with(|n| {
+        let id = n.get();
+        n.set(id + 1);
+        id
+    })
 }
 
 impl Tab {
@@ -370,6 +403,11 @@ impl Tab {
             loading: Rc::new(Cell::new(false)),
             char_count: Rc::new(Cell::new(0)),
             drop_indicator: Rc::new(RefCell::new(None)),
+            large: Rc::new(Cell::new(false)),
+            backup_id: next_backup_id(),
+            backup_dirty: Rc::new(Cell::new(modified)),
+            backup_written: Rc::new(Cell::new(false)),
+            pending_save: Rc::new(RefCell::new(None)),
         };
 
         tab.bind_events();
@@ -423,6 +461,14 @@ impl Tab {
             let tab = self.clone();
             move |_| {
                 if tab.loading.get() {
+                    return;
+                }
+                tab.backup_dirty.set(true);
+                if tab.large.get() {
+                    // 全文を取り出して付け直す処理 (色分け・編集行・アウトライン・プレビュー) は
+                    // しない。タイトルの「*」と行桁だけ
+                    tab.update_title();
+                    tab.update_status();
                     return;
                 }
                 let text = stc.get_text();
@@ -899,7 +945,7 @@ impl Tab {
     /// プレビューが無くてコンソールだけ出ているときは診断だけ取る
     fn render_preview(&self) {
         let filetype = self.filetype();
-        if !filetype.has_preview() {
+        if !filetype.has_preview() || self.large.get() {
             return;
         }
         let text = self.text();
@@ -1605,6 +1651,14 @@ impl Tab {
     }
 
     fn load_text(&self, text: &str, modified: bool) {
+        let large = is_large(text.len(), &settings::get());
+        self.large.set(large);
+        editor::set_large_mode(&self.stc, large);
+        // これから入力する改行をファイルの改行コードに合わせる (LF のファイルに CRLF を混ぜない)
+        scintilla::set_eol_mode(
+            &self.stc,
+            LineEnding::detect(text).unwrap_or_else(LineEnding::platform),
+        );
         self.loading.set(true);
         self.stc.set_text(text);
         if !modified {
@@ -1613,9 +1667,42 @@ impl Tab {
             self.stc.set_save_point();
         }
         self.loading.set(false);
-        *self.tracker.borrow_mut() = ChangeTracker::new(text);
+        *self.tracker.borrow_mut() = if large {
+            ChangeTracker::new("")
+        } else {
+            ChangeTracker::new(text)
+        };
         editor::clear_change_marks(&self.stc, true, true);
         self.refresh_from_text(text);
+    }
+
+    /// 大きなファイルとして開いている (色分けなどを止めている) か
+    pub fn is_large(&self) -> bool {
+        self.large.get()
+    }
+
+    /// スナップショット (backup.rs) の識別子
+    pub fn backup_id(&self) -> u64 {
+        self.backup_id
+    }
+
+    /// 最後のスナップショットの後に編集があったか。呼ぶと「書いた」ことになる
+    pub fn take_backup_dirty(&self) -> bool {
+        self.backup_dirty.replace(false)
+    }
+
+    pub fn set_backup_dirty(&self) {
+        self.backup_dirty.set(true);
+    }
+
+    /// スナップショットを書いたか (消すものがあるか)
+    pub fn backup_written(&self) -> &Cell<bool> {
+        &self.backup_written
+    }
+
+    /// 裏で続いている保存
+    pub fn pending_save(&self) -> &RefCell<Option<PendingSave>> {
+        &self.pending_save
     }
 
     /// 保存した直後に呼ぶ: 未保存の編集行の印を「保存済み」に替える (設定によっては消す)
@@ -1623,7 +1710,9 @@ impl Tab {
         self.stc.set_save_point();
         let settings = settings::get();
         editor::mark_changes_saved(&self.stc, &settings);
-        self.tracker.borrow_mut().rebase(&self.text());
+        if !self.large.get() {
+            self.tracker.borrow_mut().rebase(&self.text());
+        }
         editor::refresh_line_numbers(&self.stc, &settings);
         self.refresh_decorations();
         self.update_title();
@@ -1646,7 +1735,12 @@ impl Tab {
     fn refresh_from_text(&self, text: &str) {
         let settings = settings::get();
         let filetype = self.filetype();
-        editor::restyle(&self.stc, text, filetype);
+        if self.large.get() {
+            // 色分け無し (全文をスタイル 0 に)。アウトラインとプレビューも作らない
+            editor::restyle(&self.stc, text, FileType::Txt);
+        } else {
+            editor::restyle(&self.stc, text, filetype);
+        }
         editor::update_margins(&self.stc, &settings);
         editor::refresh_line_numbers(&self.stc, &settings);
         self.char_count.set(scintilla::count_characters(
@@ -1654,6 +1748,10 @@ impl Tab {
             0,
             self.stc.get_length(),
         ));
+        if self.large.get() {
+            self.refresh_decorations();
+            return;
+        }
         self.refresh_outline(text);
         self.request_render();
         self.refresh_decorations();
@@ -1747,7 +1845,8 @@ impl Tab {
             &tr_args("status.chars", &[("n", &self.char_count.get().to_string())]),
             3,
         );
-        status.set_status_text(&tr("status.encoding"), 4);
+        let encoding = self.doc.borrow().encoding.label();
+        status.set_status_text(&encoding, 4);
     }
 
     fn apply_actionbar_setting(&self, settings: &Settings) {
@@ -1876,4 +1975,10 @@ mod tests {
         assert_eq!(parse_location("warning: 3:1: unused"), Some((3, 1)));
         assert_eq!(parse_location("Typst: OK (2 pages, 15 ms)"), None);
     }
+}
+
+/// 設定 `files.large_file_mb` を超える大きさか (0 なら無制限)
+pub fn is_large(len: usize, settings: &Settings) -> bool {
+    let mb = settings.files.large_file_mb as usize;
+    mb > 0 && len > mb * 1024 * 1024
 }

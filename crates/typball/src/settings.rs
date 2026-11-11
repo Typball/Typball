@@ -421,6 +421,19 @@ pub struct Files {
     pub external_change: ExternalChange,
     /// 新規文書の名前に連番を付ける ("無題-1.txt")。false なら "無題.txt"
     pub untitled_numbering: bool,
+    /// 新規文書の文字コード (`fileio::Encoding::id`: "utf-8" / "utf-8-bom" / "shift_jis" ...)
+    pub default_encoding: String,
+    /// UTF-8 として読めないファイルの文字コード。"auto" なら内容から推定する
+    pub fallback_encoding: String,
+    /// この大きさ (MB) を超えるファイルは確認してから、色分け・編集行の強調・アウトライン・
+    /// プレビューを止めて開く
+    pub large_file_mb: u32,
+    /// この大きさ (MB) を超えるファイルは開かない (メモリを使い切って落ちるのを防ぐ)
+    pub max_file_mb: u32,
+    /// 文書と書き出しの保存のしかた (一時ファイルと入れ替える / 直接書き込む)
+    pub save_method: SaveMethod,
+    /// 未保存の文書を数秒ごとにスナップショットし、落ちたときに次の起動で復元する
+    pub recovery_backup: bool,
 }
 
 impl Default for Files {
@@ -429,6 +442,12 @@ impl Default for Files {
             default_filetype: "txt".to_string(),
             external_change: ExternalChange::Ask,
             untitled_numbering: true,
+            default_encoding: "utf-8".to_string(),
+            fallback_encoding: "auto".to_string(),
+            large_file_mb: 16,
+            max_file_mb: 256,
+            save_method: SaveMethod::Atomic,
+            recovery_backup: true,
         }
     }
 }
@@ -448,6 +467,26 @@ pub enum ExternalChange {
 
 impl ExternalChange {
     pub const ALL: [ExternalChange; 3] = [Self::Ask, Self::Reload, Self::Ignore];
+}
+
+/// 文書を保存するときの書き込み方
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SaveMethod {
+    /// 同じフォルダの一時ファイルに書いてから元のファイルと入れ替える (途中で失敗しても元が残る)
+    #[default]
+    Atomic,
+    /// 元のファイルに直接書き込む (保存先のフォルダに一時ファイルを作らない)
+    Direct,
+}
+
+impl SaveMethod {
+    pub const ALL: [SaveMethod; 2] = [Self::Atomic, Self::Direct];
+
+    /// `fileio::write_with` に渡す値
+    pub fn atomic(self) -> bool {
+        self == Self::Atomic
+    }
 }
 
 /// 種別ごとに、タブを開いたときにどのペイン・バーを出すか (解決済みの値)
@@ -629,7 +668,7 @@ impl Settings {
             "# Typball settings (https://github.com/Typball/Typball)\n\
              # 無い項目は既定値になります。このファイルをコピーすれば設定を移行できます。\n\n{body}"
         );
-        std::fs::write(&path, text).map_err(|e| e.to_string())
+        crate::fileio::write(&path, text.as_bytes()).map_err(|e| e.to_string())
     }
 }
 

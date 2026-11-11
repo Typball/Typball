@@ -412,6 +412,10 @@ pub fn refresh_line_numbers(stc: &StyledTextCtrl, settings: &Settings) {
     if !settings.editor.line_numbers.left() {
         return;
     }
+    // 大きなファイルでは Scintilla 自身の行番号マージンにしてある (全行の文字列を付け直さない)
+    if scintilla::margin_type(stc, MARGIN_LINENUMBERS) == scintilla::SC_MARGIN_NUMBER {
+        return;
+    }
     let highlight = settings.editor.highlight_changes;
     for line in 0..stc.get_line_count() {
         let style = match line_change(stc, line) {
@@ -421,6 +425,20 @@ pub fn refresh_line_numbers(stc: &StyledTextCtrl, settings: &Settings) {
         };
         scintilla::margin_set_text(stc, line, &(line + 1).to_string());
         scintilla::margin_set_style(stc, line, style);
+    }
+}
+
+/// 大きなファイル向けの表示に切り替える: 行番号は Scintilla 自身の Number マージンで描く
+/// (行ごとの文字列・スタイルを付け直す O(行数) の処理をしない)。編集行の強調は付かない
+pub fn set_large_mode(stc: &StyledTextCtrl, large: bool) {
+    let want = if large {
+        MarginType::Number
+    } else {
+        MarginType::RText
+    };
+    let is_number = scintilla::margin_type(stc, MARGIN_LINENUMBERS) == scintilla::SC_MARGIN_NUMBER;
+    if is_number != large {
+        stc.set_margin_type_typed(MARGIN_LINENUMBERS, want);
     }
 }
 
@@ -590,7 +608,7 @@ fn line_of(text: &str, offset: usize) -> usize {
         .count()
 }
 
-fn hash_of<T: Hash + ?Sized>(value: &T) -> u64 {
+pub fn hash_of<T: Hash + ?Sized>(value: &T) -> u64 {
     let mut h = DefaultHasher::new();
     value.hash(&mut h);
     h.finish()

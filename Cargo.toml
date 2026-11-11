@@ -18,6 +18,7 @@ debug = false
 strip = true
 
 [patch.crates-io]
-# wxdragon-sys の vendored コピー。build.rs に 1 か所だけ手を入れている ("Typball patch" で検索):
-# 環境変数 WXDRAGON_WEBVIEW_EDGE_STATIC で wxUSE_WEBVIEW_EDGE_STATIC を CMake に渡す
+# wxdragon-sys の vendored コピー ("Typball patch" で検索。一覧は vendor/README.md):
+# 環境変数 WXDRAGON_WEBVIEW_EDGE_STATIC で wxUSE_WEBVIEW_EDGE_STATIC を CMake に渡す、
+# ファイルダイアログに選択リストを足す関数 (保存ダイアログの文字コード選択)
 wxdragon-sys = { path = "vendor/wxdragon-sys" }

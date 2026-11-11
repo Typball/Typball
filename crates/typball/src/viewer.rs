@@ -67,7 +67,22 @@ pub fn open_one(path: &Path) -> Option<Rc<Viewer>> {
         viewer.frame.raise();
         return Some(viewer);
     }
-    match Document::open(path) {
+    // プレビューだけなので読み込みは同期。大きすぎるファイルだけ断る
+    let settings = settings::get();
+    let max = settings.files.max_file_mb as u64 * 1024 * 1024;
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let result = if max > 0 && size > max {
+        Err(std::io::Error::other(tr_args(
+            "dialog.too_large_short",
+            &[
+                ("size", &(size / 1024 / 1024).to_string()),
+                ("max", &settings.files.max_file_mb.to_string()),
+            ],
+        )))
+    } else {
+        Document::open(path, crate::document::decode_options(&settings))
+    };
+    match result {
         Ok((doc, text)) => Some(Viewer::new(doc, text)),
         Err(e) => {
             MessageDialog::builder(
@@ -257,7 +272,7 @@ impl Viewer {
             return;
         }
         let name = self.doc.borrow().title();
-        let reloaded = self.doc.borrow_mut().reload();
+        let reloaded = self.doc.borrow_mut().reload(&settings::get());
         match reloaded {
             Ok(text) => {
                 *self.text.borrow_mut() = text;
