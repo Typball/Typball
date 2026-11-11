@@ -27,12 +27,12 @@ use crate::dnd_win;
 use crate::document::{self, Document, SaveTarget};
 use crate::editmenu::{self, EditItem};
 use crate::editor;
-use crate::fileio::{self, DecodeOptions, Encoding};
+use crate::fileio::{self, DecodeOptions, Encoding, LineEnding};
 use crate::filetype::FileType;
 use crate::i18n::{self, tr, tr_args};
 use crate::settings::{self, ExternalChange, LastTab, LineNumbers, Settings, Wrap};
 use crate::settings_dialog;
-use crate::tab::{status_widths, PendingSave, Tab, TabHost, STATUS_FIELD_WIDTHS};
+use crate::tab::{status_widths, EolField, PendingSave, Tab, TabHost, STATUS_FIELD_WIDTHS};
 use crate::tabbar::{DragTarget, TabBar};
 use crate::theme::{self, contains, inflate};
 use crate::toolbar::{ToolBar, ToolItem};
@@ -73,6 +73,15 @@ const ID_GOTO_LINE: i32 = ID_HIGHEST + 39;
 const ID_VIEW_CONSOLE: i32 = ID_HIGHEST + 40;
 const ID_OPEN_VIEWER: i32 = ID_HIGHEST + 41;
 const ID_VIEW_TOOLBAR: i32 = ID_HIGHEST + 42;
+/// 編集 > 改行コード: ID_EOL_BASE + `LineEnding::ALL` の添字 (+43 .. +45)
+const ID_EOL_BASE: i32 = ID_HIGHEST + 43;
+/// 表示 > 記号を表示: 改行 / EOF / 空白とタブ
+const ID_VIEW_EOL: i32 = ID_HIGHEST + 46;
+const ID_VIEW_EOF: i32 = ID_HIGHEST + 47;
+const ID_VIEW_WHITESPACE: i32 = ID_HIGHEST + 48;
+/// 編集 > タブをスペースに変換 / スペースをタブに変換 (文書全体)
+const ID_TABS_TO_SPACES: i32 = ID_HIGHEST + 49;
+const ID_SPACES_TO_TABS: i32 = ID_HIGHEST + 50;
 /// 文字コードを指定して開き直す (`Encoding::all` の添字)。
 /// +400 .. は他のモジュール (+60 編集 / +100 アクション / +200 ペイン / +300 更新) と重ならない
 const ID_ENC_REOPEN_BASE: i32 = ID_HIGHEST + 400;
@@ -280,15 +289,18 @@ fn build_window(position: Option<Point>) -> WindowRef {
         "status",
     );
     status.set_status_widths(&status_widths(&frame));
-    // 拡大率の違うモニターへ移ったら欄の幅を当て直す (wx は WM_DPICHANGED を処理したあとに
-    // ウィンドウの大きさを変えるので、サイズイベントで拡大率の変化を見る)
+    let eol = EolField::new(&status);
+    // 拡大率の違うモニターへ移ったら欄の幅を測り直す (wx は欄の幅を拡大率に合わせて直さない。
+    // WM_DPICHANGED を処理したあとにウィンドウの大きさを変えるので、サイズイベントで拡大率の変化を見る)
     frame.on_size({
         let scale = Cell::new(frame.from_dip_int(9600));
+        let eol = eol.clone();
         move |_| {
             let now = frame.from_dip_int(9600);
             if now != scale.get() {
                 scale.set(now);
                 status.set_status_widths(&status_widths(&frame));
+                eol.rescale();
             }
         }
     });
@@ -315,6 +327,7 @@ fn build_window(position: Option<Point>) -> WindowRef {
             tabbar: tabbar.clone(),
             frame,
             status,
+            eol,
             on_panes_changed: Rc::new(|| {}),
             on_layout_changed: Rc::new(|| {}),
             on_action: Rc::new(|_| {}),
@@ -749,6 +762,33 @@ pub fn build_menu_bar(win: &WindowRef) {
     );
 
     let edit = editmenu::edit_menu();
+    // 改行コード: 文書のすべての改行を選んだものに変換する (印は今の改行コード)。ラジオ項目にしない:
+    // wx は印の付いたラジオ項目を選んでもイベントを送らないので、改行が混ざった文書を今の改行コードに
+    // そろえ直せなくなる
+    let eol_menu = Menu::builder().build();
+    for (i, eol) in LineEnding::ALL.iter().enumerate() {
+        eol_menu.append(
+            ID_EOL_BASE + i as i32,
+            &tr(eol.label_key()),
+            &tr("menu.help_text.line_ending"),
+            ItemKind::Check,
+        );
+    }
+    edit.append_separator();
+    edit.append_submenu(eol_menu, &tr("menu.line_ending"), "");
+    // タブとスペースの一括変換 (文書全体)
+    edit.append(
+        ID_TABS_TO_SPACES,
+        &tr("menu.tabs_to_spaces"),
+        &tr("menu.help_text.tabs_to_spaces"),
+        ItemKind::Normal,
+    );
+    edit.append(
+        ID_SPACES_TO_TABS,
+        &tr("menu.spaces_to_tabs"),
+        &tr("menu.help_text.spaces_to_tabs"),
+        ItemKind::Normal,
+    );
 
     let search = Menu::builder()
         .append_item(ID_FIND, &tr("menu.find"), &tr("menu.help_text.find"))
@@ -783,6 +823,21 @@ pub fn build_menu_bar(win: &WindowRef) {
     }
     view.append_submenu(line_numbers, &tr("menu.line_numbers"), "");
     view.append(ID_VIEW_RULER, &tr("menu.view_ruler"), "", ItemKind::Check);
+    // 不可視文字の記号 (改行・EOF・空白とタブ)
+    let marks = Menu::builder().build();
+    for (id, key) in [
+        (ID_VIEW_EOL, "eol"),
+        (ID_VIEW_EOF, "eof"),
+        (ID_VIEW_WHITESPACE, "whitespace"),
+    ] {
+        marks.append(
+            id,
+            &tr(&format!("menu.marks_{key}")),
+            &tr(&format!("menu.help_text.marks_{key}")),
+            ItemKind::Check,
+        );
+    }
+    view.append_submenu(marks, &tr("menu.marks"), "");
     view.append(
         ID_VIEW_CHANGES,
         &tr("menu.view_changes"),
@@ -933,6 +988,9 @@ fn update_dynamic_menus(win: &WindowRef) {
             view.check_item(ID_LINE_NUMBERS_BASE + i as i32, true);
         }
         view.check_item(ID_VIEW_RULER, s.editor.show_ruler);
+        view.check_item(ID_VIEW_EOL, s.editor.show_eol);
+        view.check_item(ID_VIEW_EOF, s.editor.show_eof);
+        view.check_item(ID_VIEW_WHITESPACE, s.editor.show_whitespace);
         view.check_item(ID_VIEW_TOOLBAR, s.general.show_toolbar);
         view.check_item(ID_VIEW_CHANGES, s.editor.highlight_changes);
         let can_clear = tab.is_some() && s.editor.highlight_changes;
@@ -970,8 +1028,18 @@ fn update_edit_menu(win: &WindowRef) {
         return;
     };
     if let Some(edit) = bar.get_menu(MENU_EDIT) {
-        let target = w.current_tab().map(|t| t.edit_target());
+        let tab = w.current_tab();
+        let target = tab.as_ref().map(|t| t.edit_target());
         editmenu::update_enabled(&edit, target.as_ref());
+        // 改行コードの印を今の文書に合わせる (開き直し・Undo・保存ダイアログでも変わるので、開くたびに見る)
+        let current = tab.as_ref().map(|t| t.line_ending());
+        for (i, eol) in LineEnding::ALL.iter().enumerate() {
+            let id = ID_EOL_BASE + i as i32;
+            bar.enable_item(id, tab.is_some());
+            bar.check_item(id, current == Some(*eol));
+        }
+        bar.enable_item(ID_TABS_TO_SPACES, tab.is_some());
+        bar.enable_item(ID_SPACES_TO_TABS, tab.is_some());
     }
 }
 
@@ -1015,6 +1083,34 @@ fn handle_menu(win: &WindowRef, id: i32) {
                     SaveMode::Save
                 };
                 save_tab(win, &tab, mode);
+            }
+        }
+        id if (ID_EOL_BASE..ID_EOL_BASE + LineEnding::ALL.len() as i32).contains(&id) => {
+            if let Some(tab) = current {
+                let eol = LineEnding::ALL[(id - ID_EOL_BASE) as usize];
+                tab.convert_line_endings(eol);
+                let frame = win.borrow().frame;
+                status(
+                    &frame,
+                    &tr_args(
+                        "status.line_ending_changed",
+                        &[("eol", &tr(eol.label_key()))],
+                    ),
+                );
+            }
+            // wx が選んだ項目の印を反転させているので、今の改行コードに合わせ直す
+            update_edit_menu(win);
+        }
+        ID_TABS_TO_SPACES | ID_SPACES_TO_TABS => {
+            if let Some(tab) = current {
+                let to_spaces = id == ID_TABS_TO_SPACES;
+                let key = match (tab.convert_tabs(to_spaces), to_spaces) {
+                    (false, _) => "status.tabs_nothing",
+                    (true, true) => "status.tabs_to_spaces",
+                    (true, false) => "status.spaces_to_tabs",
+                };
+                let frame = win.borrow().frame;
+                status(&frame, &tr(key));
             }
         }
         ID_CLOSE_TAB => {
@@ -1080,6 +1176,11 @@ fn handle_menu(win: &WindowRef, id: i32) {
             update_dynamic_menus(win);
         }
         ID_VIEW_RULER => change_settings(win, |s| s.editor.show_ruler = !s.editor.show_ruler),
+        ID_VIEW_EOL => change_settings(win, |s| s.editor.show_eol = !s.editor.show_eol),
+        ID_VIEW_EOF => change_settings(win, |s| s.editor.show_eof = !s.editor.show_eof),
+        ID_VIEW_WHITESPACE => change_settings(win, |s| {
+            s.editor.show_whitespace = !s.editor.show_whitespace
+        }),
         ID_VIEW_TOOLBAR => {
             change_settings(win, |s| s.general.show_toolbar = !s.general.show_toolbar)
         }
@@ -1450,8 +1551,13 @@ fn status(frame: &Frame, text: &str) {
 /// 新しいタブを開く。`text` が無ければ種別の既定テキスト
 pub fn new_tab(win: &WindowRef, filetype: FileType, text: Option<&str>) -> Tab {
     let doc = Document::untitled(filetype, next_untitled_number());
-    // 形式ごとの雛形 (設定 [filetypes.*] template、無ければ言語ごとの既定)
-    let default_text = filetype.template(&settings::get());
+    // 形式ごとの雛形 (設定 [filetypes.*] template、無ければ言語ごとの既定)。改行は設定の
+    // 「新規文書の改行コード」にそろえる (雛形そのものは LF で書かれている)
+    let settings = settings::get();
+    let default_text = settings
+        .files
+        .line_ending()
+        .convert(&filetype.template(&settings));
     add_tab(win, doc, text.unwrap_or(&default_text), false, None)
 }
 
@@ -1649,9 +1755,9 @@ fn save_tab(win: &WindowRef, tab: &Tab, mode: SaveMode) -> bool {
     }
     let _paused = pause_checks(win);
     let current = tab.doc.borrow().path.clone();
-    // 上書き保存は今の保存先と文字コードのまま。無題と「名前を付けて保存」はダイアログで両方を聞く
-    let (path, encoding) = match (mode, current.clone()) {
-        (SaveMode::Save, Some(path)) => (path, tab.doc.borrow().encoding),
+    // 上書き保存は今の保存先・文字コード・改行のまま。無題と「名前を付けて保存」はダイアログで聞く
+    let (path, encoding, mut line_ending) = match (mode, current.clone()) {
+        (SaveMode::Save, Some(path)) => (path, tab.doc.borrow().encoding, None),
         _ => match ask_save_target(&frame, tab) {
             Some(chosen) => chosen,
             None => return false,
@@ -1678,9 +1784,25 @@ fn save_tab(win: &WindowRef, tab: &Tab, mode: SaveMode) -> bool {
     let Some((bytes, encoding)) = encode_for_save(&frame, tab, &name, &text, encoding) else {
         return false;
     };
+    // 改行コードを変えて保存する: そろえたテキストを書く。文書の改行は書けた後に finish_save でそろえる。
+    // 表せない文字の確認は文書のテキストで済ませてある (位置がエディタと合う。改行はどの文字コードでも表せる)
+    let bytes = match line_ending {
+        Some(eol) => match fileio::encode(&eol.convert(&text), encoding) {
+            Ok(converted) => converted,
+            Err(_) => {
+                line_ending = None;
+                bytes
+            }
+        },
+        None => bytes,
+    };
     let hash = editor::hash_of(&text);
     drop(text);
-    let target = SaveTarget { path, encoding };
+    let target = SaveTarget {
+        path,
+        encoding,
+        line_ending,
+    };
     let display = target.path.display().to_string();
     let dest = target.path.clone();
     // 設定はスレッドローカルなので、書き込みのスレッドに渡す前に読んでおく
@@ -1725,9 +1847,10 @@ fn save_tab(win: &WindowRef, tab: &Tab, mode: SaveMode) -> bool {
     }
 }
 
-/// 保存先と文字コードを聞く (無題の文書と「名前を付けて保存」)。保存ダイアログの中に文字コードの
-/// 選択リストがあり、最初は今の文字コードが選ばれている。拡張子が無ければ文書の種別のものを付ける
-fn ask_save_target(frame: &Frame, tab: &Tab) -> Option<(PathBuf, Encoding)> {
+/// 保存先・文字コード・改行コードを聞く (無題の文書と「名前を付けて保存」)。保存ダイアログの中に
+/// 文字コードと改行コードの選択リストがあり、最初は今のものが選ばれている。改行コードは今と違うものを
+/// 選んだときだけ Some (選び直さなければ、混ざった改行もそのまま書く)。拡張子が無ければ文書の種別のものを付ける
+fn ask_save_target(frame: &Frame, tab: &Tab) -> Option<(PathBuf, Encoding, Option<LineEnding>)> {
     let (name, dir, filetype, current) = {
         let doc = tab.doc.borrow();
         let dir = doc
@@ -1746,7 +1869,19 @@ fn ask_save_target(frame: &Frame, tab: &Tab) -> Option<(PathBuf, Encoding)> {
             0
         }
     };
-    let labels: Vec<String> = encodings.iter().map(|e| e.label()).collect();
+    // 設定の「新規文書の文字コード」(初期値は UTF-8) には「(デフォルト)」を添えて、迷ったときの選び先が
+    // 分かるようにする
+    let default = Encoding::parse(&settings::get().files.default_encoding).unwrap_or_default();
+    let labels: Vec<String> = encodings
+        .iter()
+        .map(|e| {
+            if *e == default {
+                tr_args("dialog.save_encoding_default", &[("encoding", &e.label())])
+            } else {
+                e.label()
+            }
+        })
+        .collect();
     let mut builder = FileDialog::builder(frame)
         .with_message(&tr("dialog.save_title"))
         .with_default_file(&name)
@@ -1756,11 +1891,25 @@ fn ask_save_target(frame: &Frame, tab: &Tab) -> Option<(PathBuf, Encoding)> {
         builder = builder.with_default_dir(&dir);
     }
     let dialog = builder.build();
-    let (result, chosen) = crate::filedialog::show_modal_with_choice(
+    let current_eol = tab.line_ending();
+    let eol_labels: Vec<String> = LineEnding::ALL.iter().map(|e| tr(e.label_key())).collect();
+    let (result, chosen) = crate::filedialog::show_modal_with_choices(
         &dialog,
-        &tr("dialog.save_encoding"),
-        &labels,
-        selected,
+        &[
+            crate::filedialog::Choice {
+                label: &tr("dialog.save_encoding"),
+                items: &labels,
+                selection: selected,
+            },
+            crate::filedialog::Choice {
+                label: &tr("dialog.save_line_ending"),
+                items: &eol_labels,
+                selection: LineEnding::ALL
+                    .iter()
+                    .position(|e| *e == current_eol)
+                    .unwrap_or(0),
+            },
+        ],
     );
     if result != ID_OK {
         return None;
@@ -1769,7 +1918,17 @@ fn ask_save_target(frame: &Frame, tab: &Tab) -> Option<(PathBuf, Encoding)> {
     if path.extension().is_none() {
         path.set_extension(filetype.extension());
     }
-    Some((path, encodings.get(chosen).copied().unwrap_or(current)))
+    let encoding = chosen
+        .first()
+        .and_then(|i| encodings.get(*i))
+        .copied()
+        .unwrap_or(current);
+    let line_ending = chosen
+        .get(1)
+        .and_then(|i| LineEnding::ALL.get(*i))
+        .copied()
+        .filter(|e| *e != current_eol);
+    Some((path, encoding, line_ending))
 }
 
 /// テキストを保存用のバイト列にする。その文字コードで表せない文字があれば、どの文字かを示して
@@ -1821,8 +1980,12 @@ fn save_error(frame: &Frame, path: &str, e: &std::io::Error) {
     );
 }
 
-/// `target` に書けた: 保存先と文字コードを文書に反映する。未保存の印には触らない
+/// `target` に書けた: 保存先と文字コードを文書に反映し、改行コードを変えて書いたなら文書の改行もそろえる。
+/// 未保存の印には触らない
 fn apply_saved_target(tab: &Tab, target: &SaveTarget) {
+    if let Some(eol) = target.line_ending {
+        tab.convert_line_endings(eol);
+    }
     let moved = tab.doc.borrow_mut().saved_to(target);
     if moved {
         // 別の名前で保存した: 色分け・ペイン・アクションバーを種別に合わせ直し、プレビューを

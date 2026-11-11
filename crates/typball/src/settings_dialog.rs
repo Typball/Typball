@@ -12,12 +12,13 @@ use std::rc::Rc;
 use wxdragon::id::{ID_CANCEL, ID_HIGHEST, ID_OK};
 use wxdragon::prelude::*;
 
-use crate::fileio::Encoding;
+use crate::fileio::{Encoding, LineEnding};
 use crate::filetype::FileType;
 use crate::i18n::{self, tr, tr_args};
 use crate::settings::{
-    self, BottomWidth, Channel, ExternalChange, InstanceMode, LastTab, LineNumbers, MarkdownMode,
-    OpenMode, Panes, PanesOverride, SaveMethod, SavedChanges, Settings, Theme, Wrap,
+    self, Backspace, BottomWidth, Channel, ExternalChange, InstanceMode, LastTab, LineNumbers,
+    MarkdownMode, OpenMode, Panes, PanesOverride, RulerTabs, SaveMethod, SavedChanges, Settings,
+    Theme, Wrap,
 };
 
 /// OK が押されたときに呼ばれる読み戻し処理の集まり
@@ -548,6 +549,19 @@ fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog
         0,
     );
 
+    // 行間: 1 行の高さに足す px
+    let line_spacing = SpinCtrl::builder(panel)
+        .with_range(0, 40)
+        .with_initial_value(current.editor.line_spacing)
+        .build();
+    grid.add(
+        &label(panel, "settings.editor.line_spacing"),
+        0,
+        LABEL_FLAGS,
+        0,
+    );
+    grid.add(&line_spacing, 0, SizerFlag::AlignLeft, 0);
+
     let tab_width = SpinCtrl::builder(panel)
         .with_range(1, 16)
         .with_initial_value(current.editor.tab_width)
@@ -559,6 +573,48 @@ fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog
         0,
     );
     grid.add(&tab_width, 0, SizerFlag::AlignLeft, 0);
+
+    // Tab キーで入力するもの: スペース (タブ位置まで) / タブ文字
+    let tab_key = choice_with(
+        panel,
+        vec![
+            tr("settings.editor.tab_key_spaces"),
+            tr("settings.editor.tab_key_tab"),
+        ],
+    );
+    tab_key.set_selection(current.editor.use_tabs as u32);
+    grid.add(&label(panel, "settings.editor.tab_key"), 0, LABEL_FLAGS, 0);
+    grid.add(&tab_key, 0, SizerFlag::AlignLeft, 0);
+
+    // Backspace でスペースを消すときの動作: Backspace::ALL の並び順
+    let backspace = choice_with(
+        panel,
+        Backspace::ALL
+            .iter()
+            .map(|mode| {
+                tr(match mode {
+                    Backspace::Char => "settings.editor.backspace_char",
+                    Backspace::SoftTab => "settings.editor.backspace_soft_tab",
+                    Backspace::TabStop => "settings.editor.backspace_tab_stop",
+                    Backspace::FullTabStop => "settings.editor.backspace_full_tab_stop",
+                    Backspace::ToTabStop => "settings.editor.backspace_to_tab_stop",
+                    Backspace::Indent => "settings.editor.backspace_indent",
+                })
+            })
+            .collect(),
+    );
+    let selected = Backspace::ALL
+        .iter()
+        .position(|mode| *mode == current.editor.backspace)
+        .unwrap_or(0);
+    backspace.set_selection(selected as u32);
+    grid.add(
+        &label(panel, "settings.editor.backspace"),
+        0,
+        LABEL_FLAGS,
+        0,
+    );
+    grid.add(&backspace, 0, SizerFlag::AlignLeft, 0);
 
     // 折り返し: Wrap::ALL の並び順。文字数は「指定文字数で折り返す」のときだけ使う
     let wrap = choice_with(panel, Wrap::ALL.iter().map(|v| tr(wrap_key(*v))).collect());
@@ -581,6 +637,27 @@ fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog
         0,
     );
     grid.add(&wrap_column, 0, SizerFlag::AlignLeft, 0);
+
+    // ルーラー: 表示しない / 表示する (タブ位置の示し方 = RulerTabs::ALL の並び順)
+    let mut ruler_labels = vec![tr("settings.editor.ruler_off")];
+    ruler_labels.extend(RulerTabs::ALL.iter().map(|tabs| {
+        tr(match tabs {
+            RulerTabs::None => "settings.editor.ruler_plain",
+            RulerTabs::Arrow => "settings.editor.ruler_arrow",
+        })
+    }));
+    let ruler = choice_with(panel, ruler_labels);
+    let selected = if current.editor.show_ruler {
+        1 + RulerTabs::ALL
+            .iter()
+            .position(|tabs| *tabs == current.editor.ruler_tabs)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    ruler.set_selection(selected as u32);
+    grid.add(&label(panel, "settings.editor.ruler"), 0, LABEL_FLAGS, 0);
+    grid.add(&ruler, 0, SizerFlag::AlignLeft, 0);
 
     // 行番号の位置: LineNumbers::ALL の並び順で選択肢を作る
     let line_numbers = choice_with(
@@ -627,20 +704,54 @@ fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog
     );
     grid.add(&change_highlight, 0, SizerFlag::AlignLeft, 0);
 
-    let show_ruler = CheckBox::builder(panel)
-        .with_label(&tr("settings.editor.show_ruler"))
-        .with_value(current.editor.show_ruler)
-        .build();
+    // 不可視文字の記号 (表示 > 記号を表示 と同じ)。1 行に並べる (縦に積むとページに収まらない)
+    let mark_boxes: Vec<CheckBox> = [
+        ("settings.editor.show_eol", current.editor.show_eol),
+        ("settings.editor.show_eof", current.editor.show_eof),
+        (
+            "settings.editor.show_whitespace",
+            current.editor.show_whitespace,
+        ),
+    ]
+    .into_iter()
+    .map(|(key, value)| {
+        CheckBox::builder(panel)
+            .with_label(&tr(key))
+            .with_value(value)
+            .build()
+    })
+    .collect();
+    let marks_row = BoxSizer::builder(Orientation::Horizontal).build();
+    for check in &mark_boxes {
+        marks_row.add(
+            check,
+            0,
+            SizerFlag::AlignCenterVertical | SizerFlag::Right,
+            px(GAP * 2),
+        );
+    }
+    grid.add(
+        &label(panel, "settings.editor.show_marks"),
+        0,
+        LABEL_FLAGS,
+        0,
+    );
+    grid.add_sizer(&marks_row, 0, SizerFlag::AlignLeft, 0);
 
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
     sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
-    sizer.add(&show_ruler, 0, SizerFlag::Left | SizerFlag::Right, px(GAP));
     panel.set_sizer(sizer, true);
 
     readers.push(Box::new(move |s| {
         s.editor.font_face = font_face.get_value().trim().to_string();
         s.editor.font_size = font_size.value();
         s.editor.tab_width = tab_width.value();
+        s.editor.line_spacing = line_spacing.value().clamp(0, 40);
+        s.editor.use_tabs = tab_key.get_selection() == Some(1);
+        s.editor.backspace = backspace
+            .get_selection()
+            .and_then(|i| Backspace::ALL.get(i as usize).copied())
+            .unwrap_or_default();
         s.editor.wrap = wrap
             .get_selection()
             .and_then(|i| Wrap::ALL.get(i as usize).copied())
@@ -658,7 +769,17 @@ fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog
             }
             None => s.editor.highlight_changes = false,
         }
-        s.editor.show_ruler = show_ruler.is_checked();
+        // 「表示しない」を選んでも、タブ位置の示し方は残す (表示メニューで出し直したときに戻る)
+        match ruler.get_selection().unwrap_or(0) as usize {
+            0 => s.editor.show_ruler = false,
+            i => {
+                s.editor.show_ruler = true;
+                s.editor.ruler_tabs = RulerTabs::ALL.get(i - 1).copied().unwrap_or_default();
+            }
+        }
+        s.editor.show_eol = mark_boxes[0].is_checked();
+        s.editor.show_eof = mark_boxes[1].is_checked();
+        s.editor.show_whitespace = mark_boxes[2].is_checked();
     }));
 }
 
@@ -768,6 +889,26 @@ fn page_files(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog:
     );
     grid.add(&default_encoding, 0, SizerFlag::AlignLeft, 0);
 
+    // 新規文書の改行コード (先頭は「OS の標準」)
+    let mut eol_labels = vec![tr_args(
+        "settings.files.line_ending_auto",
+        &[("eol", LineEnding::platform().short_label())],
+    )];
+    eol_labels.extend(LineEnding::ALL.iter().map(|e| tr(e.label_key())));
+    let default_line_ending = choice_with(panel, eol_labels);
+    let selected = LineEnding::parse(&current.files.default_line_ending)
+        .and_then(|e| LineEnding::ALL.iter().position(|x| *x == e))
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    default_line_ending.set_selection(selected as u32);
+    grid.add(
+        &label(panel, "settings.files.default_line_ending"),
+        0,
+        LABEL_FLAGS,
+        0,
+    );
+    grid.add(&default_line_ending, 0, SizerFlag::AlignLeft, 0);
+
     let mut fallback_labels = vec![tr("settings.files.fallback_auto")];
     fallback_labels.extend(labels);
     let fallback_encoding = choice_with(panel, fallback_labels);
@@ -852,6 +993,12 @@ fn page_files(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog:
             .and_then(|i| encodings.get(i as usize))
             .map(|e| e.id())
             .unwrap_or_else(|| "utf-8".to_string());
+        s.files.default_line_ending = default_line_ending
+            .get_selection()
+            .and_then(|i| (i as usize).checked_sub(1))
+            .and_then(|i| LineEnding::ALL.get(i))
+            .map(|e| e.id().to_string())
+            .unwrap_or_else(|| "auto".to_string());
         s.files.fallback_encoding = fallback_encoding
             .get_selection()
             .filter(|i| *i > 0)

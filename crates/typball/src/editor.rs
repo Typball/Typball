@@ -90,6 +90,12 @@ pub struct EditorColors {
     pub brace_bg: u32,
     pub brace_fg: u32,
     pub brace_bad: u32,
+    /// 不可視文字の記号 (改行・EOF・空白・タブ・全角空白の枠)
+    pub mark: u32,
+    /// 新規文書の改行コード (設定) と違う改行の記号。種類ごとに色を変える
+    pub mark_crlf: u32,
+    pub mark_lf: u32,
+    pub mark_cr: u32,
 }
 
 const LIGHT: EditorColors = EditorColors {
@@ -111,6 +117,10 @@ const LIGHT: EditorColors = EditorColors {
     brace_bg: 0xffe97a,
     brace_fg: 0x1a1a1a,
     brace_bad: 0xff0000,
+    mark: 0x5b9bd5,
+    mark_crlf: 0x7b3fe4,
+    mark_lf: 0xd9600a,
+    mark_cr: 0xd0105a,
 };
 
 /// VS Code Dark+ 風
@@ -133,6 +143,10 @@ const DARK: EditorColors = EditorColors {
     brace_bg: 0x515c6a,
     brace_fg: 0xffffff,
     brace_bad: 0xf44747,
+    mark: 0x4f7fb0,
+    mark_crlf: 0xb388ff,
+    mark_lf: 0xffa040,
+    mark_cr: 0xff5c8a,
 };
 
 /// 今のエディタの配色
@@ -319,6 +333,12 @@ fn apply_colors(stc: &StyledTextCtrl, settings: &Settings) {
     scintilla::set_sel_back(stc, c.selection);
 }
 
+/// 行間 (設定 `editor.line_spacing`) で行の上と下に足す高さ (px)。上を多めに分ける
+pub fn line_extra(stc: &StyledTextCtrl, settings: &Settings) -> (i32, i32) {
+    let extra = stc.from_dip_int(settings.editor.line_spacing.clamp(0, 40));
+    (extra - extra / 2, extra / 2)
+}
+
 /// 設定ダイアログで変えられる項目を既存のエディタに反映する
 pub fn apply_settings(stc: &StyledTextCtrl, settings: &Settings) {
     apply_colors(stc, settings);
@@ -328,8 +348,13 @@ pub fn apply_settings(stc: &StyledTextCtrl, settings: &Settings) {
     });
     let tab = settings.editor.tab_width.clamp(1, 16);
     stc.set_tab_width(tab);
-    stc.set_use_tabs(false);
+    stc.set_use_tabs(settings.editor.use_tabs);
     stc.set_indent(tab);
+    crate::marks::apply_settings(stc);
+    // 行間: 行の上下に足す高さ
+    let (top, bottom) = line_extra(stc, settings);
+    scintilla::send(stc, scintilla::SCI_SETEXTRAASCENT, top as usize, 0);
+    scintilla::send(stc, scintilla::SCI_SETEXTRADESCENT, bottom as usize, 0);
     update_margins(stc, settings);
     refresh_line_numbers(stc, settings);
 }

@@ -29,10 +29,14 @@ extern "C" {
 
 // Scintilla.h の定数 (使うものだけ)
 pub const SCI_GETFIRSTVISIBLELINE: i32 = 2152;
+pub const SCI_CONVERTEOLS: i32 = 2029;
+pub const SCI_GETEOLMODE: i32 = 2030;
 pub const SCI_SETEOLMODE: i32 = 2031;
 pub const SCI_BEGINUNDOACTION: i32 = 2078;
 pub const SCI_ENDUNDOACTION: i32 = 2079;
 pub const SCI_GETLINEENDPOSITION: i32 = 2136;
+pub const SCI_GETLINE: i32 = 2153;
+pub const SCI_LINELENGTH: i32 = 2350;
 pub const SCI_SETMARGINLEFT: i32 = 2155;
 pub const SCI_GETMARGINLEFT: i32 = 2156;
 pub const SCI_SETMARGINRIGHT: i32 = 2157;
@@ -51,6 +55,9 @@ pub const SCI_TEXTWIDTH: i32 = 2276;
 pub const SCI_TEXTHEIGHT: i32 = 2279;
 pub const SCI_SETMODEVENTMASK: i32 = 2359;
 pub const SCI_LINESONSCREEN: i32 = 2370;
+pub const SCI_SETEXTRAASCENT: i32 = 2525;
+pub const SCI_GETSELECTIONS: i32 = 2570;
+pub const SCI_SETEXTRADESCENT: i32 = 2527;
 pub const SCI_MARGINSETTEXT: i32 = 2530;
 pub const SCI_MARGINSETSTYLE: i32 = 2532;
 pub const SCI_COUNTCHARACTERS: i32 = 2633;
@@ -80,6 +87,27 @@ pub fn set_eol_mode(stc: &StyledTextCtrl, eol: crate::fileio::LineEnding) {
         LineEnding::Lf => 2,
     };
     send(stc, SCI_SETEOLMODE, mode, 0);
+}
+
+/// Enter で入る改行コード
+pub fn eol_mode(stc: &StyledTextCtrl) -> crate::fileio::LineEnding {
+    use crate::fileio::LineEnding;
+    match send(stc, SCI_GETEOLMODE, 0, 0) {
+        0 => LineEnding::Crlf,
+        1 => LineEnding::Cr,
+        _ => LineEnding::Lf,
+    }
+}
+
+/// 文書のすべての改行を `eol` に変える (1 回の Undo で戻せる。Enter で入る改行は変えない)
+pub fn convert_eols(stc: &StyledTextCtrl, eol: crate::fileio::LineEnding) {
+    use crate::fileio::LineEnding;
+    let mode = match eol {
+        LineEnding::Crlf => 0,
+        LineEnding::Cr => 1,
+        LineEnding::Lf => 2,
+    };
+    send(stc, SCI_CONVERTEOLS, mode, 0);
 }
 
 /// Scintilla メッセージを送る。エディタが破棄済みなら 0。
@@ -265,6 +293,22 @@ pub fn set_mod_event_mask(stc: &StyledTextCtrl, mask: i32) {
 /// 行末 (改行文字の手前) の位置
 pub fn line_end_position(stc: &StyledTextCtrl, line: i32) -> i32 {
     send(stc, SCI_GETLINEENDPOSITION, line.max(0) as usize, 0) as i32
+}
+
+/// 行の中身 (UTF-8 のバイト列。行末の改行も含む)
+pub fn line_bytes(stc: &StyledTextCtrl, line: i32) -> Vec<u8> {
+    let line = line.max(0) as usize;
+    let len = send(stc, SCI_LINELENGTH, line, 0).max(0) as usize;
+    // SCI_GETLINE は終端の NUL を書かない。1 バイト多く取っておく
+    let mut buffer = vec![0u8; len + 1];
+    let copied = send(stc, SCI_GETLINE, line, buffer.as_mut_ptr() as isize).max(0) as usize;
+    buffer.truncate(copied.min(len));
+    buffer
+}
+
+/// 選択範囲の数 (ふつうは 1。矩形選択や複数選択では 2 以上)
+pub fn selections(stc: &StyledTextCtrl) -> i32 {
+    send(stc, SCI_GETSELECTIONS, 0, 0) as i32
 }
 
 /// 2 つの位置の間の文字数 (バイト数ではなく、UTF-8 の文字数)

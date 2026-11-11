@@ -54,6 +54,7 @@ mod i18n;
 #[cfg(windows)]
 mod ime_win;
 mod instance;
+mod marks;
 mod mdhtml;
 mod outline;
 mod pane;
@@ -65,6 +66,7 @@ mod settings_dialog;
 mod site;
 mod tab;
 mod tabbar;
+mod tabs;
 mod theme;
 mod toolbar;
 mod update;

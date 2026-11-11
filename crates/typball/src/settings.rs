@@ -159,7 +159,7 @@ impl Default for Preview {
     fn default() -> Self {
         Self {
             font_face: typball_core::EMBEDDED_FONT_FAMILY.to_string(),
-            font_size: 11,
+            font_size: 12,
             markdown_mode: MarkdownMode::Auto,
             // -D: 下書きも出す、-N: 保存したページへ移動、-M: 出力をディスクに書かない
             site_command: "hugo server -D -N -M --port {port} -s {root}".to_string(),
@@ -365,13 +365,103 @@ pub enum SavedChanges {
     Clear,
 }
 
+/// Backspace でキャレットの前のスペースを消すときの動作 (スペース以外はいつも 1 文字ずつ)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Backspace {
+    /// いつも 1 個ずつ消す
+    Char,
+    /// キャレットがタブ位置 (タブ幅の倍数の桁) にあり、その前がタブ幅ぶんスペースだけのときに限り、
+    /// そのタブ幅ぶんをまとめて消す (Tab キーで入れた 1 区切りだけを戻す)。文字の後ろを埋めている
+    /// スペース (表の桁そろえなど) は 1 個ずつ
+    #[default]
+    SoftTab,
+    /// キャレットがタブ位置にあるときだけ、続いているスペースをタブ幅ぶんまでまとめて消す
+    TabStop,
+    /// 前のタブ位置からキャレットまでがスペースだけのとき、そこまでまとめて消す。途中に文字があれば
+    /// (タブ位置の区切りの中にスペースがそろっていなければ) 1 個ずつ
+    FullTabStop,
+    /// 前のタブ位置まで、続いているスペースをまとめて消す (途中に文字があれば、その文字の後ろまで)
+    ToTabStop,
+    /// 行頭の字下げの中にあるときだけ、前のタブ位置までまとめて消す
+    Indent,
+}
+
+impl Backspace {
+    /// 設定画面の選択肢の並び
+    pub const ALL: [Backspace; 6] = [
+        Self::Char,
+        Self::SoftTab,
+        Self::TabStop,
+        Self::FullTabStop,
+        Self::ToTabStop,
+        Self::Indent,
+    ];
+
+    /// まとめて消すスペースの数。0 ならふつうの Backspace (1 文字) にする。
+    /// `col` はキャレットの桁、`spaces` はキャレットの直前に続くスペースの数、`in_indent` は
+    /// 行頭からキャレットまでが空白 (スペースとタブ) だけかどうか、`tab` はタブ幅
+    pub fn count(self, col: usize, spaces: usize, in_indent: bool, tab: usize) -> usize {
+        let tab = tab.max(1);
+        if col == 0 {
+            return 0;
+        }
+        // 前のタブ位置までの桁数 (ちょうどタブ位置にあればタブ幅)
+        let to_stop = col - (col - 1) / tab * tab;
+        let count = match self {
+            Backspace::Char => 0,
+            Backspace::SoftTab if col % tab == 0 && spaces >= tab => tab,
+            Backspace::SoftTab => 0,
+            Backspace::TabStop if col % tab == 0 => spaces.min(tab),
+            Backspace::TabStop => 0,
+            Backspace::FullTabStop if spaces >= to_stop => to_stop,
+            Backspace::FullTabStop => 0,
+            Backspace::ToTabStop => spaces.min(to_stop),
+            Backspace::Indent if in_indent => spaces.min(to_stop),
+            Backspace::Indent => 0,
+        };
+        // 1 個ならふつうの Backspace と同じ
+        if count < 2 {
+            0
+        } else {
+            count
+        }
+    }
+}
+
+/// ルーラーでのタブ位置 (タブ幅ごとの桁) の示し方
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RulerTabs {
+    /// 示さない (目盛りだけ)
+    None,
+    /// タブ位置に小さな下向きの矢印を付ける。"bold" (目盛りを太くする) は一度作ってやめた選択肢で、
+    /// 設定ファイルに残っていても読めるように、矢印として受け付ける
+    #[default]
+    #[serde(alias = "bold")]
+    Arrow,
+}
+
+impl RulerTabs {
+    /// 設定画面の選択肢の並び
+    pub const ALL: [RulerTabs; 2] = [Self::None, Self::Arrow];
+}
+
 /// エディタ
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Editor {
     pub font_face: String,
     pub font_size: i32,
+    /// 行間: 1 行の高さに足す px (拡大率 100% のとき)。0 でフォントの行の高さのまま
+    pub line_spacing: i32,
+    /// タブ幅 (半角の文字数)
     pub tab_width: i32,
+    /// Tab キーでタブ文字を入力する。false ならタブ位置までのスペースを入力する
+    pub use_tabs: bool,
+    /// Backspace でスペースを消すときの動作
+    /// ("char" / "soft_tab" / "tab_stop" / "full_tab_stop" / "to_tab_stop" / "indent")
+    pub backspace: Backspace,
     /// 行の折り返し ("none" / "window" / "column")
     pub wrap: Wrap,
     /// `wrap = "column"` のときの 1 行の文字数 (半角の数字の幅で数える)
@@ -386,6 +476,14 @@ pub struct Editor {
     pub saved_changes: SavedChanges,
     /// エディタ上部に文字位置のルーラーを表示する
     pub show_ruler: bool,
+    /// ルーラーでのタブ位置の示し方 ("none" / "arrow")
+    pub ruler_tabs: RulerTabs,
+    /// 改行を矢印で表示する (CRLF は折れた矢印、LF は ↓、CR は ←)。新規文書の改行コードと違うものは色を変える
+    pub show_eol: bool,
+    /// ファイルの終わりに [EOF] を表示する
+    pub show_eof: bool,
+    /// 空白・タブ・全角空白を記号で表示する
+    pub show_whitespace: bool,
     /// エディタ (本文・行番号・ルーラー) の配色
     pub theme: Theme,
 }
@@ -398,14 +496,21 @@ impl Default for Editor {
     fn default() -> Self {
         Self {
             font_face: DEFAULT_FONT_FACE.to_string(),
-            font_size: 11,
-            tab_width: 2,
+            font_size: 12,
+            line_spacing: 1,
+            tab_width: 4,
+            use_tabs: false,
+            backspace: Backspace::SoftTab,
             wrap: Wrap::Window,
             wrap_column: 80,
             line_numbers: LineNumbers::Left,
+            show_eol: true,
+            show_eof: true,
+            show_whitespace: true,
             highlight_changes: true,
             saved_changes: SavedChanges::Keep,
             show_ruler: true,
+            ruler_tabs: RulerTabs::Arrow,
             theme: Theme::System,
         }
     }
@@ -423,6 +528,8 @@ pub struct Files {
     pub untitled_numbering: bool,
     /// 新規文書の文字コード (`fileio::Encoding::id`: "utf-8" / "utf-8-bom" / "shift_jis" ...)
     pub default_encoding: String,
+    /// 新規文書 (と、改行の無いファイル) の改行コード: "auto" (この OS の標準) / "crlf" / "lf" / "cr"
+    pub default_line_ending: String,
     /// UTF-8 として読めないファイルの文字コード。"auto" なら内容から推定する
     pub fallback_encoding: String,
     /// この大きさ (MB) を超えるファイルは確認してから、色分け・編集行の強調・アウトライン・
@@ -436,6 +543,14 @@ pub struct Files {
     pub recovery_backup: bool,
 }
 
+impl Files {
+    /// 新規文書の改行コード (`default_line_ending`。"auto" や読めない値ならこの OS の標準)
+    pub fn line_ending(&self) -> crate::fileio::LineEnding {
+        crate::fileio::LineEnding::parse(&self.default_line_ending)
+            .unwrap_or_else(crate::fileio::LineEnding::platform)
+    }
+}
+
 impl Default for Files {
     fn default() -> Self {
         Self {
@@ -443,6 +558,7 @@ impl Default for Files {
             external_change: ExternalChange::Ask,
             untitled_numbering: true,
             default_encoding: "utf-8".to_string(),
+            default_line_ending: "auto".to_string(),
             fallback_encoding: "auto".to_string(),
             large_file_mb: 16,
             max_file_mb: 256,
@@ -691,10 +807,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn backspace_modes_remove_spaces_up_to_a_tab_stop() {
+        use Backspace::*;
+        // (桁, 直前のスペースの数, 行頭の字下げの中か) → タブ幅 4 でまとめて消す数
+        // 並びは [Char, SoftTab, TabStop, FullTabStop, ToTabStop, Indent]
+        let cases = [
+            // 4 桁目・スペース 4 個・字下げの中
+            ((4, 4, true), [0, 4, 4, 4, 4, 4]),
+            // 6 桁目・スペース 6 個・字下げの中: タブ位置ではない
+            ((6, 6, true), [0, 0, 0, 2, 2, 2]),
+            // 8 桁目・スペース 8 個
+            ((8, 8, true), [0, 4, 4, 4, 4, 4]),
+            // "ab  |": 4 桁目・スペース 2 個・行の途中。前のタブ位置 (0 桁目) までの間に文字がある
+            ((4, 2, false), [0, 0, 2, 0, 2, 0]),
+            // "abc   |": 6 桁目・スペース 3 個・行の途中。前のタブ位置 (4 桁目) まではスペースだけ
+            ((6, 3, false), [0, 0, 0, 2, 2, 0]),
+            // "ab      |": 8 桁目・スペース 6 個。前のタブ位置 (4 桁目) まではスペースだけ
+            ((8, 6, false), [0, 4, 4, 4, 4, 0]),
+            // "abcde   |": 8 桁目・スペース 3 個。タブ位置だが、前のタブ位置までの間に文字がある
+            // (表の桁そろえ: 文字の後ろを埋めたスペース)
+            ((8, 3, false), [0, 0, 3, 0, 3, 0]),
+            // "abcde  |": 7 桁目・スペース 2 個。前のタブ位置 (4 桁目) までの間に文字がある
+            ((7, 2, false), [0, 0, 0, 0, 2, 0]),
+            // スペース 1 個・スペース無し・行頭はふつうの Backspace
+            ((4, 1, false), [0, 0, 0, 0, 0, 0]),
+            ((4, 0, false), [0, 0, 0, 0, 0, 0]),
+            ((0, 0, true), [0, 0, 0, 0, 0, 0]),
+            // 5 桁目・スペース 5 個: 前のタブ位置までは 1 個だけ
+            ((5, 5, true), [0, 0, 0, 0, 0, 0]),
+        ];
+        for ((col, spaces, in_indent), wanted) in cases {
+            for (mode, wanted) in Backspace::ALL.into_iter().zip(wanted) {
+                assert_eq!(
+                    mode.count(col, spaces, in_indent, 4),
+                    wanted,
+                    "{mode:?} at column {col} after {spaces} spaces"
+                );
+            }
+        }
+        assert_eq!(
+            Backspace::ALL,
+            [Char, SoftTab, TabStop, FullTabStop, ToTabStop, Indent]
+        );
+        // 設定ファイルの名前
+        let s: Settings = toml::from_str("[editor]\nbackspace = \"tab_stop\"\n").unwrap();
+        assert_eq!(s.editor.backspace, TabStop);
+        let s: Settings = toml::from_str("[editor]\nbackspace = \"full_tab_stop\"\n").unwrap();
+        assert_eq!(s.editor.backspace, FullTabStop);
+        assert_eq!(Settings::default().editor.backspace, SoftTab);
+        // やめた選択肢 "bold" が設定ファイルに残っていても読める
+        let s: Settings = toml::from_str("[editor]\nruler_tabs = \"bold\"\n").unwrap();
+        assert_eq!(s.editor.ruler_tabs, RulerTabs::Arrow);
+    }
+
+    #[test]
     fn missing_and_unknown_keys_are_tolerated() {
         let s: Settings = toml::from_str("[editor]\nfont_size = 14\n[future]\nx = 1\n").unwrap();
         assert_eq!(s.editor.font_size, 14);
-        assert_eq!(s.editor.tab_width, 2);
+        assert_eq!(s.editor.tab_width, 4);
+        assert!(!s.editor.use_tabs);
         assert_eq!(s.general.language, "system");
         assert_eq!(s.editor.line_numbers, LineNumbers::Left);
     }

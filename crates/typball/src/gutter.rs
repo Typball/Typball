@@ -9,6 +9,7 @@ use wxdragon::prelude::*;
 
 use crate::editor::{self, rgb, LineChange};
 use crate::scintilla;
+use crate::settings::RulerTabs;
 use crate::settings::{self, Settings};
 use crate::theme;
 
@@ -81,7 +82,7 @@ fn paint_ruler(panel: &Panel, stc: &StyledTextCtrl) {
     dc.draw_line(0, height - 1, width, height - 1);
 
     // 目盛りの数字は UI フォント (設定のフォントはエディタの中身だけ)。ズームには追従する
-    let Some(label_font) = theme::ui_font(false, false, stc.get_zoom() - 2) else {
+    let Some(label_font) = theme::ui_font(false, false, stc.get_zoom()) else {
         return;
     };
     dc.set_font(&label_font);
@@ -100,6 +101,12 @@ fn paint_ruler(panel: &Panel, stc: &StyledTextCtrl) {
         0
     };
     dc.set_pen(rgb(c.ruler_tick), 1, PenStyle::Solid);
+    // タブ位置 (タブ幅ごとの桁) の示し方
+    let (tab, tab_marks) = {
+        let s = crate::settings::get();
+        (s.editor.tab_width.clamp(1, 16), s.editor.ruler_tabs)
+    };
+    let px = panel.from_dip_int(1).max(1);
     loop {
         let x = origin + col * unit;
         if x >= right {
@@ -114,10 +121,26 @@ fn paint_ruler(panel: &Panel, stc: &StyledTextCtrl) {
             height / 6
         };
         dc.draw_line(x, height - 1 - len, x, height - 1);
+        if col > 0 && col % tab == 0 {
+            match tab_marks {
+                RulerTabs::None => {}
+                // 目盛りの上に、下向きの小さな三角 (下線から少し浮かせる)
+                RulerTabs::Arrow => {
+                    let rows = 3 * px;
+                    for row in 0..rows {
+                        let half = rows - 1 - row;
+                        let y = height - 1 - 2 * px - rows + row;
+                        dc.draw_line(x - half, y, x + half + 1, y);
+                    }
+                }
+            }
+        }
         if col % 10 == 0 && col > 0 {
+            // 数字は目盛りの真上に、目盛りを中心にして置く。字が大きいので目盛りの上の方に重なるが、
+            // 横の位置は桁と合わせる (ユーザーの希望。右にずらすと、どの桁の数字か分かりにくい)
             let label = col.to_string();
             let (tw, _) = dc.get_text_extent(&label);
-            dc.draw_text(&label, x - tw / 2, 0);
+            dc.draw_text(&label, x - tw / 2, -px);
         }
         col += 1;
     }
@@ -220,6 +243,7 @@ fn paint_gutter(panel: &Panel, stc: &StyledTextCtrl) {
         scintilla::doc_line_from_visible(stc, first_visible + scintilla::lines_on_screen(stc))
             .min(last_line);
 
+    let extra_top = editor::line_extra(stc, &crate::settings::get()).0;
     for line in first_doc..=last_doc {
         let y = scintilla::point_y_from_position(stc, stc.position_from_line(line));
         if y >= height {
@@ -251,6 +275,7 @@ fn paint_gutter(panel: &Panel, stc: &StyledTextCtrl) {
         dc.set_text_foreground(rgb(fg));
         let label = (line + 1).to_string();
         let (tw, _) = dc.get_text_extent(&label);
-        dc.draw_text(&label, width - right_pad - tw, y);
+        // 行間 (設定) で行の上に足した高さのぶん、本文と同じだけ下げる
+        dc.draw_text(&label, width - right_pad - tw, y + extra_top);
     }
 }

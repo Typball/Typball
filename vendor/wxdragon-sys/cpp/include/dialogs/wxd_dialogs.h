@@ -103,11 +103,14 @@ wxd_FileDialog_SetWildcard(const wxd_FileDialog_t* self, const char* wildCard);
 WXD_EXPORTED void
 wxd_FileDialog_SetFilterIndex(const wxd_FileDialog_t* self, int filterIndex);
 
-// Typball patch: show the dialog with one extra labelled drop-down list (wxFileDialogCustomizeHook).
-// `selection` is the initial item on entry and the chosen item on return. Returns the ShowModal code.
+// Typball patch: show the dialog with extra labelled drop-down lists. `labels`, `counts` and
+// `selections` have `choices` entries; `items` holds the items of all the lists one after another
+// (`counts[i]` of them for list i). `selections` gives the initial item of each list on entry and
+// the chosen ones on return. Returns the ShowModal code.
 WXD_EXPORTED int
-wxd_FileDialog_ShowModalWithChoice(wxd_FileDialog_t* self, const char* label,
-                                   const char* const* items, int count, int* selection);
+wxd_FileDialog_ShowModalWithChoices(wxd_FileDialog_t* self, int choices,
+                                    const char* const* labels, const char* const* items,
+                                    const int* counts, int* selections);
 
 // --- ColourDialog ---
 WXD_EXPORTED wxd_ColourData_t*

@@ -463,41 +463,139 @@ pub enum LineEnding {
 }
 
 impl LineEnding {
-    /// テキストで一番多い改行コード (先頭 1 MiB を見る)。改行が無ければ None
-    pub fn detect(text: &str) -> Option<LineEnding> {
-        let bytes = &text.as_bytes()[..text.len().min(1024 * 1024)];
-        let (mut crlf, mut lf, mut cr) = (0usize, 0usize, 0usize);
-        let mut i = 0;
-        while i < bytes.len() {
-            match bytes[i] {
-                b'\r' if bytes.get(i + 1) == Some(&b'\n') => {
-                    crlf += 1;
-                    i += 1;
-                }
-                b'\r' => cr += 1,
-                b'\n' => lf += 1,
-                _ => {}
-            }
-            i += 1;
-        }
-        if crlf == 0 && lf == 0 && cr == 0 {
-            None
-        } else if crlf >= lf && crlf >= cr {
-            Some(LineEnding::Crlf)
-        } else if lf >= cr {
-            Some(LineEnding::Lf)
-        } else {
-            Some(LineEnding::Cr)
+    /// メニューと保存ダイアログに出す並び
+    pub const ALL: [LineEnding; 3] = [LineEnding::Crlf, LineEnding::Lf, LineEnding::Cr];
+
+    /// 改行そのもの
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LineEnding::Crlf => "\r\n",
+            LineEnding::Lf => "\n",
+            LineEnding::Cr => "\r",
         }
     }
 
-    /// 改行の無い文書と新規文書に使う、この OS の改行コード
+    /// 設定ファイルに書く名前 ("crlf" / "lf" / "cr")
+    pub fn id(self) -> &'static str {
+        match self {
+            LineEnding::Crlf => "crlf",
+            LineEnding::Lf => "lf",
+            LineEnding::Cr => "cr",
+        }
+    }
+
+    /// 設定ファイルの名前から (大文字小文字は区別しない)。"auto" や知らない名前は None
+    pub fn parse(id: &str) -> Option<LineEnding> {
+        LineEnding::ALL
+            .into_iter()
+            .find(|eol| eol.id().eq_ignore_ascii_case(id.trim()))
+    }
+
+    /// 短い名前 ("CRLF" など。混在の表示や説明に使う)
+    pub fn short_label(self) -> &'static str {
+        match self {
+            LineEnding::Crlf => "CRLF",
+            LineEnding::Lf => "LF",
+            LineEnding::Cr => "CR",
+        }
+    }
+
+    /// 使う OS を添えた名前 ("CRLF (Windows)" など) の言語ファイルのキー
+    pub fn label_key(self) -> &'static str {
+        match self {
+            LineEnding::Crlf => "eol.crlf",
+            LineEnding::Lf => "eol.lf",
+            LineEnding::Cr => "eol.cr",
+        }
+    }
+
+    /// すべての改行をこの改行コードにそろえたテキスト (Scintilla の SCI_CONVERTEOLS と同じ結果になる:
+    /// CR LF・CR・LF のどれも 1 つの改行として数える)
+    pub fn convert(self, text: &str) -> String {
+        let eol = self.as_str();
+        let mut out = String::with_capacity(text.len() + text.len() / 32);
+        let mut rest = text;
+        while let Some(i) = rest.find(['\r', '\n']) {
+            out.push_str(&rest[..i]);
+            out.push_str(eol);
+            let len = if rest[i..].starts_with("\r\n") { 2 } else { 1 };
+            rest = &rest[i + len..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// テキストで一番多い改行コード (先頭 1 MiB を見る)。改行が無ければ None
+    pub fn detect(text: &str) -> Option<LineEnding> {
+        EolCounts::of(&text.as_bytes()[..text.len().min(1024 * 1024)]).majority()
+    }
+
+    /// この OS の改行コード (設定 `files.default_line_ending` が "auto" のときの新規文書の改行)
     pub fn platform() -> LineEnding {
         if cfg!(windows) {
             LineEnding::Crlf
         } else {
             LineEnding::Lf
         }
+    }
+}
+
+/// テキストの中の改行コードごとの数
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EolCounts {
+    pub crlf: usize,
+    pub lf: usize,
+    pub cr: usize,
+}
+
+impl EolCounts {
+    /// `bytes` (UTF-8 のテキスト) の改行を数える。CR LF は 1 つの改行
+    pub fn of(bytes: &[u8]) -> EolCounts {
+        let mut counts = EolCounts::default();
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\r' if bytes.get(i + 1) == Some(&b'\n') => {
+                    counts.crlf += 1;
+                    i += 1;
+                }
+                b'\r' => counts.cr += 1,
+                b'\n' => counts.lf += 1,
+                _ => {}
+            }
+            i += 1;
+        }
+        counts
+    }
+
+    /// 一番多い改行コード。改行が無ければ None
+    pub fn majority(&self) -> Option<LineEnding> {
+        if self.crlf == 0 && self.lf == 0 && self.cr == 0 {
+            None
+        } else if self.crlf >= self.lf && self.crlf >= self.cr {
+            Some(LineEnding::Crlf)
+        } else if self.lf >= self.cr {
+            Some(LineEnding::Lf)
+        } else {
+            Some(LineEnding::Cr)
+        }
+    }
+
+    /// 使われている改行コード (`LineEnding::ALL` の順)
+    pub fn kinds(&self) -> Vec<LineEnding> {
+        LineEnding::ALL
+            .into_iter()
+            .filter(|eol| match eol {
+                LineEnding::Crlf => self.crlf > 0,
+                LineEnding::Lf => self.lf > 0,
+                LineEnding::Cr => self.cr > 0,
+            })
+            .collect()
+    }
+
+    /// 2 種類以上の改行コードが混ざっている
+    pub fn mixed(&self) -> bool {
+        self.kinds().len() > 1
     }
 }
 
@@ -969,6 +1067,64 @@ mod tests {
         assert_eq!(LineEnding::detect("a\r\nb\r\n"), Some(LineEnding::Crlf));
         assert_eq!(LineEnding::detect("a\rb\r"), Some(LineEnding::Cr));
         assert_eq!(LineEnding::detect("a\nb\nc\r\n"), Some(LineEnding::Lf));
+    }
+
+    #[test]
+    fn line_ending_ids_round_trip() {
+        for eol in LineEnding::ALL {
+            assert_eq!(LineEnding::parse(eol.id()), Some(eol));
+        }
+        assert_eq!(LineEnding::parse(" CRLF "), Some(LineEnding::Crlf));
+        assert_eq!(LineEnding::parse("auto"), None);
+        assert_eq!(LineEnding::parse(""), None);
+    }
+
+    #[test]
+    fn mixed_line_endings_are_counted() {
+        let counts = EolCounts::of(b"a\r\nb\nc\r\nd\re\r\n");
+        assert_eq!(
+            counts,
+            EolCounts {
+                crlf: 3,
+                lf: 1,
+                cr: 1
+            }
+        );
+        assert!(counts.mixed());
+        assert_eq!(counts.majority(), Some(LineEnding::Crlf));
+        assert_eq!(
+            counts.kinds(),
+            vec![LineEnding::Crlf, LineEnding::Lf, LineEnding::Cr]
+        );
+        // 1 種類だけ・改行なしは混在ではない。CR LF を CR と LF の 2 つに数えない
+        assert!(!EolCounts::of(b"a\r\nb\r\n").mixed());
+        assert_eq!(EolCounts::of(b"a\r\nb\r\n").kinds(), vec![LineEnding::Crlf]);
+        assert!(!EolCounts::of(b"no newline").mixed());
+        assert_eq!(EolCounts::of(b"").majority(), None);
+        // 文末が CR で終わっていても次の文字を読みにいかない
+        assert_eq!(EolCounts::of(b"a\r").cr, 1);
+    }
+
+    #[test]
+    fn line_endings_are_converted_whatever_they_were() {
+        // 混ざっていても、どの改行も 1 つとして数えてそろえる (CR LF を 2 つにしない)
+        let mixed = "a\r\nb\nc\rd\r\n\r\ne\n\nf\r\rg";
+        assert_eq!(LineEnding::Lf.convert(mixed), "a\nb\nc\nd\n\ne\n\nf\n\ng");
+        assert_eq!(
+            LineEnding::Crlf.convert(mixed),
+            "a\r\nb\r\nc\r\nd\r\n\r\ne\r\n\r\nf\r\n\r\ng"
+        );
+        assert_eq!(LineEnding::Cr.convert(mixed), "a\rb\rc\rd\r\re\r\rf\r\rg");
+        // 改行が無い・末尾の改行・日本語
+        assert_eq!(LineEnding::Crlf.convert("改行なし"), "改行なし");
+        assert_eq!(LineEnding::Crlf.convert("日本語\n"), "日本語\r\n");
+        assert_eq!(LineEnding::Lf.convert(""), "");
+        for eol in LineEnding::ALL {
+            // そろえた後はその改行コードだけになり、もう一度かけても変わらない
+            let once = eol.convert(mixed);
+            assert_eq!(LineEnding::detect(&once), Some(eol));
+            assert_eq!(eol.convert(&once), once);
+        }
     }
 
     #[test]

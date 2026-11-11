@@ -5,6 +5,10 @@
 #include <wx/sizer.h>            // Needed for wxSizer
 #include "wx/gdicmn.h"           // For wxSize, wxPoint
 #include <cstring>               // For strdup
+#include <memory>                // For std::shared_ptr (Typball patch)
+#ifdef __WXMSW__
+#include <wx/msw/wrapcctl.h> // For SetWindowSubclass (Typball patch)
+#endif
 #include <cstdlib>       // For free (though free typically comes from stdlib.h, cstdlib is C++ way)
 #include <wx/font.h>     // For wxFont in SetFont
 #include <wx/settings.h> // For wxSystemSettings and wxSYS_DEFAULT_GUI_FONT
@@ -1186,6 +1190,119 @@ wxd_Window_PostMenuCommand(wxd_Window_t* window, int id)
     wxCommandEvent evt(wxEVT_MENU, id);
     evt.SetEventObject(wx_window);
     wxPostEvent(wx_window, evt);
+}
+
+// --- Typball patch: drawing on top of a window, inside its own paint ---
+//
+// Typball draws marks (spaces, tabs, line endings) on top of the editor. wxStyledTextCtrl paints
+// through a wxBufferedPaintDC, which copies its bitmap to the window when the control's paint
+// handler returns: anything drawn from the control's own "painted" notification (SCN_PAINTED,
+// sent inside that handler) is overwritten by the copy. So the paint event is intercepted: the
+// handler below dispatches the event once more, lets it through to the control's own handler,
+// and when that has returned calls back with a DC of the same paint.
+//
+// The DC is a second wxPaintDC: wxWidgets keeps the device context of the paint in progress
+// until the event has been handled, so it draws to the same place, clipped to the area being
+// repainted. Drawing with a wxClientDC instead would reach the screen after the control's
+// picture, and the picture without the marks is visible for a moment (it flickers on every
+// click and key press).
+namespace {
+
+struct wxdAfterPaint {
+    wxWindow* window;
+    wxd_AfterPaintCallback callback;
+    void* userdata;
+    // Shared by the copies wxWidgets makes of this functor
+    std::shared_ptr<bool> inside;
+    // An input method is composing text in the window (set by wxdImeWatchProc)
+    std::shared_ptr<bool> composing;
+
+    void
+    operator()(wxPaintEvent& event) const
+    {
+        if (*inside) {
+            // The second time round: let the control's own handler have the event.
+            event.Skip();
+            return;
+        }
+        // The area about to be repainted (forgotten once the event has been handled)
+        const wxRect update = window->GetUpdateRegion().GetBox();
+        *inside = true;
+        window->GetEventHandler()->ProcessEvent(event);
+        *inside = false;
+        event.Skip(false);
+        if (callback) {
+            wxPaintDC dc(window);
+            callback(userdata, reinterpret_cast<wxd_DC_t*>(static_cast<wxDC*>(&dc)), update.x,
+                     update.y, update.width, update.height, *composing ? 1 : 0);
+        }
+    }
+};
+
+struct wxdAfterPaintRelease {
+    wxWindow* window;
+    wxd_AfterPaintRelease release;
+    void* userdata;
+
+    void
+    operator()(wxWindowDestroyEvent& event) const
+    {
+        // Children send this event to their parents too.
+        if (event.GetEventObject() == window && release)
+            release(userdata);
+        event.Skip();
+    }
+};
+
+#ifdef __WXMSW__
+// Notes when an input method starts and stops composing text in the window, and repaints the
+// window then. The composition is shown in a window of the input method on top of ours; when
+// it is committed that window disappears before the text arrives, and what was drawn behind
+// it (a mark at the end of the line) would show for a moment in its old place. The callback
+// is told about the composition so that it can leave such things out meanwhile.
+LRESULT CALLBACK
+wxdImeWatchProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR data)
+{
+    std::shared_ptr<bool>* const composing = reinterpret_cast<std::shared_ptr<bool>*>(data);
+    if (msg == WM_IME_STARTCOMPOSITION || msg == WM_IME_ENDCOMPOSITION) {
+        **composing = msg == WM_IME_STARTCOMPOSITION;
+        ::InvalidateRect(hwnd, nullptr, FALSE);
+    }
+    else if (msg == WM_NCDESTROY) {
+        ::RemoveWindowSubclass(hwnd, wxdImeWatchProc, id);
+        delete composing;
+    }
+    return ::DefSubclassProc(hwnd, msg, wParam, lParam);
+}
+#endif
+
+} // namespace
+
+WXD_EXPORTED void
+wxd_Window_BindAfterPaint(wxd_Window_t* window, wxd_AfterPaintCallback callback, void* userdata,
+                          wxd_AfterPaintRelease release)
+{
+    wxWindow* wx_window = reinterpret_cast<wxWindow*>(window);
+    if (!wx_window) {
+        if (release)
+            release(userdata);
+        return;
+    }
+#ifdef __WXMSW__
+    // Without this the control's picture and what the callback adds reach the screen one after
+    // the other (the other ports buffer the whole paint anyway).
+    wx_window->SetDoubleBuffered(true);
+#endif
+    const std::shared_ptr<bool> composing = std::make_shared<bool>(false);
+#ifdef __WXMSW__
+    std::shared_ptr<bool>* const watched = new std::shared_ptr<bool>(composing);
+    if (!::SetWindowSubclass((HWND)wx_window->GetHWND(), wxdImeWatchProc, 0x5459,
+                             reinterpret_cast<DWORD_PTR>(watched)))
+        delete watched;
+#endif
+    wx_window->Bind(wxEVT_PAINT, wxdAfterPaint{wx_window, callback, userdata,
+                                               std::make_shared<bool>(false), composing});
+    wx_window->Bind(wxEVT_DESTROY, wxdAfterPaintRelease{wx_window, release, userdata});
 }
 
 } // extern "C"

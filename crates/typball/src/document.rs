@@ -12,7 +12,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::fileio::{self, DecodeOptions, Encoding};
+use crate::fileio::{self, DecodeOptions, Encoding, LineEnding};
 use crate::filetype::FileType;
 use crate::i18n::tr;
 use crate::settings;
@@ -59,6 +59,9 @@ impl Stamp {
 pub struct SaveTarget {
     pub path: PathBuf,
     pub encoding: Encoding,
+    /// 保存ダイアログで今と違う改行コードを選んだとき: その改行コードにそろえて書いた。文書の改行も
+    /// 書けた後にそろえる (`Tab::convert_line_endings`)。None は文書の改行のまま書いた
+    pub line_ending: Option<LineEnding>,
 }
 
 /// 無題の文書の表示名: "無題-3.txt"、設定 `untitled_numbering` が false なら "無題.txt"
@@ -255,6 +258,7 @@ mod tests {
         let target = SaveTarget {
             path: new.clone(),
             encoding: sjis,
+            line_ending: None,
         };
         assert!(doc.saved_to(&target), "the document moved to another file");
         assert_eq!(doc.path.as_deref(), Some(new.as_path()));

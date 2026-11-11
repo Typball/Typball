@@ -47,7 +47,7 @@ use crate::dnd_win;
 use crate::document::Document;
 use crate::editmenu::{self, EditTarget};
 use crate::editor::{self, ChangeTracker};
-use crate::fileio::LineEnding;
+use crate::fileio::{EolCounts, LineEnding};
 use crate::filetype::FileType;
 use crate::findbar::FindBar;
 use crate::gutter::{RightGutter, Ruler};
@@ -69,12 +69,207 @@ const RENDER_DELAY_MS: i32 = 20;
 /// ペインのヘッダのメニューの ID: PANE_MENU_BASE + ペイン番号 * 8 + 項目
 const PANE_MENU_BASE: i32 = wxdragon::id::ID_HIGHEST + 200;
 
-/// ステータスバーの欄: 0 = メッセージ, 1 = 種別, 2 = 行・桁, 3 = 文字数, 4 = 文字コード。
-/// 幅は DIP (-1 は残り全部)。[`status_widths`] で実ピクセルにして渡す
-pub const STATUS_FIELD_WIDTHS: [i32; 5] = [-1, 80, 150, 110, 130];
+/// ステータスバーの欄: 0 = メッセージ, 1 = 種別, 2 = 行・桁, 3 = 文字数, 4 = 文字コード, 5 = 改行コード。
+/// 幅は DIP (-1 は残り全部)。ウィンドウを作った直後の幅で、文書を表示したら中身に合わせて右に詰める
+/// ([`EolField::fit`])
+pub const STATUS_FIELD_WIDTHS: [i32; 6] = [-1, 80, 150, 110, 130, 180];
+/// 改行コードの欄 ([`EolField`] が文字を重ねて描く)
+const STATUS_EOL_FIELD: usize = 5;
+/// 欄の文字の左右に空ける幅 (DIP)。欄を中身の幅に詰めるときに足す
+const STATUS_FIELD_PAD: i32 = 10;
+/// 右下のサイズ変更のつまみのぶん、最後の欄に足す幅 (DIP)
+const STATUS_GRIP: i32 = 14;
 
-/// ステータスバーの欄の幅 (実ピクセル)。wx はステータスバーの欄の幅を拡大率の変化に合わせて
-/// 直さないので、ウィンドウが拡大率の違うモニターへ移ったらもう一度当てる
+/// ステータスバーの改行コードの欄と、欄の幅の管理。
+///
+/// 改行コードは "CRLF (Windows)" のように使う OS を添えて出し、新規文書の改行コード (設定。初期値は
+/// この OS の標準) と違う文書では太字にする。改行コードが混ざっている文書では「混在 (CRLF / LF)」を
+/// 太字と警告の色で出す。wxStatusBar は欄ごとにフォントや色を変えられないので、欄の上に文字の
+/// コントロールを重ねて描く。
+///
+/// 種別から右の欄は中身の幅に詰めて右に寄せ、左のメッセージの欄を広く空ける ([`EolField::fit`])
+#[derive(Clone)]
+pub struct EolField {
+    status: StatusBar,
+    label: StaticText,
+    /// 今出している内容 (同じなら何もしない: キャレットが動くたびに呼ばれる)
+    shown: Rc<Cell<Option<EolShown>>>,
+    /// 欄 1..=4 の幅を決める文字 (拡大率が変わったら同じ文字で測り直す)
+    measured: Rc<RefCell<Vec<String>>>,
+    /// 今の欄の幅 (実ピクセル。空ならウィンドウを作った直後の幅のまま)
+    widths: Rc<RefCell<Vec<i32>>>,
+}
+
+/// 欄の表示を決めるもの
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct EolShown {
+    /// これから入力する改行
+    eol: LineEnding,
+    /// 新規文書の改行コード (これと違えば太字)
+    base: LineEnding,
+    /// 文書で使われている改行コード: [CRLF, LF, CR] があるか (2 つ以上なら混在)
+    used: [bool; 3],
+    /// 警告の色は配色 (ライト / ダーク) で変える
+    dark: bool,
+}
+
+/// 混在の警告の文字色 (ステータスバーの背景の上で読める濃さ)
+const EOL_WARNING_LIGHT: (u8, u8, u8) = (0xb4, 0x53, 0x09);
+const EOL_WARNING_DARK: (u8, u8, u8) = (0xfb, 0xbf, 0x24);
+
+impl EolField {
+    pub fn new(status: &StatusBar) -> Self {
+        let field = EolField {
+            status: *status,
+            label: StaticText::builder(status).with_label("").build(),
+            shown: Rc::new(Cell::new(None)),
+            measured: Rc::new(RefCell::new(Vec::new())),
+            widths: Rc::new(RefCell::new(Vec::new())),
+        };
+        // ステータスバーの大きさが変わると欄の位置も動く
+        status.on_size({
+            let field = field.clone();
+            move |event| {
+                field.place();
+                event.skip(true);
+            }
+        });
+        field
+    }
+
+    /// 欄に文書の改行コードを出す。`eol` はこれから入力する改行、`counts` は文書の中の改行の数
+    pub fn set(&self, eol: LineEnding, counts: &EolCounts) {
+        let kinds = counts.kinds();
+        let base = settings::get().files.line_ending();
+        let shown = EolShown {
+            eol,
+            base,
+            used: LineEnding::ALL.map(|e| kinds.contains(&e)),
+            dark: crate::theme::ui_dark(),
+        };
+        if self.shown.replace(Some(shown)) == Some(shown) {
+            return;
+        }
+        let mixed = counts.mixed();
+        let differs = eol != base;
+        if let Some(font) = self.status.get_font() {
+            let mut font = font.to_owned();
+            font.set_weight(if mixed || differs {
+                FontWeight::Bold
+            } else {
+                FontWeight::Normal
+            });
+            self.label.set_font(&font);
+        }
+        let name = tr(eol.label_key());
+        let (text, tip) = if mixed {
+            let used = kinds
+                .iter()
+                .map(|e| e.short_label())
+                .collect::<Vec<_>>()
+                .join(" / ");
+            (
+                tr_args("status.eol_mixed", &[("kinds", &used)]),
+                tr_args("status.eol_tip_mixed", &[("kinds", &used), ("eol", &name)]),
+            )
+        } else if differs {
+            let tip = tr_args(
+                "status.eol_tip_differs",
+                &[("eol", &name), ("base", base.short_label())],
+            );
+            (name, tip)
+        } else {
+            let tip = tr_args("status.eol_tip", &[("eol", &name)]);
+            (name, tip)
+        };
+        let colour = if mixed {
+            let (r, g, b) = if shown.dark {
+                EOL_WARNING_DARK
+            } else {
+                EOL_WARNING_LIGHT
+            };
+            Colour::new(r, g, b, 255)
+        } else {
+            self.status.get_foreground_color()
+        };
+        self.label.set_foreground_color(colour);
+        self.label.set_label(&text);
+        self.label.set_tooltip(&tip);
+        // 文字の幅が変わったので、欄の幅も合わせ直す (その中で文字も置き直す)
+        self.widths.borrow_mut().clear();
+        self.apply_widths();
+        self.label.refresh(true, None);
+    }
+
+    /// 欄 1..=4 (種別・行桁・文字数・文字コード) の幅を `measured` の文字が収まる幅にして、欄を右に詰める。
+    /// 行桁と文字数は、数字の桁が増えるたびに欄が動かないように、桁を多めに取った文字で測る
+    pub fn fit(&self, measured: Vec<String>) {
+        if *self.measured.borrow() != measured {
+            *self.measured.borrow_mut() = measured;
+            self.apply_widths();
+        }
+    }
+
+    /// 拡大率が変わった (ウィンドウが別のモニターへ移った): 同じ文字で幅を測り直す
+    pub fn rescale(&self) {
+        self.widths.borrow_mut().clear();
+        self.apply_widths();
+    }
+
+    fn apply_widths(&self) {
+        let measured = self.measured.borrow();
+        if measured.is_empty() {
+            // まだ文書を表示していない: ウィンドウを作った直後の幅のまま
+            self.place();
+            return;
+        }
+        let pad = self.status.from_dip_int(STATUS_FIELD_PAD);
+        let mut widths = vec![-1];
+        widths.extend(
+            measured
+                .iter()
+                .map(|text| self.status.get_text_extent(text).width + 2 * pad),
+        );
+        // 最後の欄は重ねた文字の幅 + 余白 + 右下のつまみ
+        widths.push(
+            self.label.get_best_size().width + 2 * pad + self.status.from_dip_int(STATUS_GRIP),
+        );
+        if *self.widths.borrow() != widths {
+            self.status.set_status_widths(&widths);
+            *self.widths.borrow_mut() = widths;
+        }
+        drop(measured);
+        self.place();
+    }
+
+    /// 文字を欄の中に置く (左に少し空け、縦は中央)
+    fn place(&self) {
+        // 欄がステータスバーに収まっていない (ウィンドウがとても狭い) ときは、位置を聞けないので文字も出さない
+        let needed: i32 = if self.widths.borrow().is_empty() {
+            status_widths(&self.status).iter().filter(|w| **w > 0).sum()
+        } else {
+            self.widths.borrow().iter().filter(|w| **w > 0).sum()
+        };
+        let fits = self.status.get_size().width >= needed;
+        self.label.show(fits);
+        if !fits {
+            return;
+        }
+        let rect = self.status.get_field_rect(STATUS_EOL_FIELD);
+        let best = self.label.get_best_size();
+        // ステータスバー自身が描く欄の文字は、欄の左端から 3px ほどのところに出る。それに合わせる
+        let pad = self.status.from_dip_int(3);
+        // 隣の欄 (ステータスバー自身が描く文字) と高さがそろうように、中央より少し下に置く
+        self.label.set_size_with_pos(
+            rect.x + pad,
+            rect.y + (rect.height - best.height + 1) / 2 + self.status.from_dip_int(1),
+            best.width.min((rect.width - pad).max(0)),
+            best.height,
+        );
+    }
+}
+
+/// ウィンドウを作った直後のステータスバーの欄の幅 (実ピクセル)
 pub fn status_widths<W: WxWidget>(window: &W) -> Vec<i32> {
     STATUS_FIELD_WIDTHS
         .iter()
@@ -90,6 +285,8 @@ pub struct TabHost {
     pub tabbar: TabBar,
     pub frame: Frame,
     pub status: StatusBar,
+    /// ステータスバーの改行コードの欄
+    pub eol: EolField,
     /// ペインの表示状態が変わったとき (表示メニューのチェックを合わせる)
     pub on_panes_changed: Rc<dyn Fn()>,
     /// ペインの配置設定が変わったとき (全ウィンドウのタブを並べ直す)
@@ -240,6 +437,8 @@ pub struct Tab {
     loading: Rc<Cell<bool>>,
     /// 全文の文字数 (変更のたびに数え直す)
     char_count: Rc<Cell<i32>>,
+    /// 文書の中の改行コードごとの数 (ステータスバーの混在の警告に使う)
+    eol_counts: Rc<Cell<EolCounts>>,
     /// ペインのヘッダをドラッグしている間だけ存在する行き先の表示
     drop_indicator: Rc<RefCell<Option<DropIndicator>>>,
     /// 大きなファイル (設定 `files.large_file_mb` 超): 色分け・編集行の強調・アウトライン・
@@ -402,6 +601,7 @@ impl Tab {
             items: Rc::new(RefCell::new(Vec::new())),
             loading: Rc::new(Cell::new(false)),
             char_count: Rc::new(Cell::new(0)),
+            eol_counts: Rc::new(Cell::new(EolCounts::default())),
             drop_indicator: Rc::new(RefCell::new(None)),
             large: Rc::new(Cell::new(false)),
             backup_id: next_backup_id(),
@@ -490,6 +690,10 @@ impl Tab {
                 tab.sync_outline_selection();
             }
         });
+        // エディタが自分を描いた直後に、同じ描画の中で不可視文字の記号を描き足す (marks.rs)
+        crate::marks::on_painted(&stc, move |dc, update, composing| {
+            crate::marks::paint(&stc, &settings::get(), dc, update, composing);
+        });
         // エディタの大きさが変わったらルーラーと右側行番号も描き直す。
         // 「指定文字数で折り返し」の右余白もエディタの幅で決まる
         stc.on_size({
@@ -525,13 +729,40 @@ impl Tab {
             let editor_box = self.editor_box;
             move || editor_box.layout()
         });
-        // エディタで Esc: 検索バーが出ていれば閉じる。それ以外のキーは Scintilla に渡す
+        // エディタで Esc: 検索バーが出ていれば閉じる。Tab / Shift+Tab / Backspace: タブ位置を表示上の
+        // 桁で扱う。
+        // それ以外のキーは Scintilla に渡す
         stc.on_key_down({
             let tab = self.clone();
             move |event| {
                 if let WindowEventData::Keyboard(key) = &event {
                     if key.get_key_code() == Some(WXK_ESCAPE) && tab.findbar.is_shown() {
                         tab.findbar.hide();
+                        return;
+                    }
+                    // Tab / Shift+Tab: タブ位置を表示上の桁で数える (Scintilla は文字数で数えるので、
+                    // 全角文字の後ろではタブ位置がずれる)
+                    if key.get_key_code() == Some(WXK_TAB) && !key.control_down() && !key.alt_down()
+                    {
+                        let handled = if key.shift_down() {
+                            tab.back_tab()
+                        } else {
+                            tab.insert_soft_tab()
+                        };
+                        if handled {
+                            event.skip(false);
+                            return;
+                        }
+                    }
+                    // Backspace: キャレットの前のスペースをタブ位置までまとめて消す (設定の動作による)
+                    if key.get_key_code() == Some(WXK_BACK)
+                        && !key.control_down()
+                        && !key.shift_down()
+                        && !key.alt_down()
+                        && tab.backspace_to_tab_stop()
+                    {
+                        // Scintilla に渡さない (渡すと、もう 1 文字消される)
+                        event.skip(false);
                         return;
                     }
                 }
@@ -1657,7 +1888,7 @@ impl Tab {
         // これから入力する改行をファイルの改行コードに合わせる (LF のファイルに CRLF を混ぜない)
         scintilla::set_eol_mode(
             &self.stc,
-            LineEnding::detect(text).unwrap_or_else(LineEnding::platform),
+            LineEnding::detect(text).unwrap_or_else(|| settings::get().files.line_ending()),
         );
         self.loading.set(true);
         self.stc.set_text(text);
@@ -1748,6 +1979,9 @@ impl Tab {
             0,
             self.stc.get_length(),
         ));
+        // ステータスバーの「混在」の警告用。軽量モードは開いたときにしかここへ来ないので、その後の編集で
+        // 混ざっても分からない
+        self.eol_counts.set(EolCounts::of(text.as_bytes()));
         if self.large.get() {
             self.refresh_decorations();
             return;
@@ -1823,7 +2057,7 @@ impl Tab {
         }
     }
 
-    /// ステータスバーの種別・行桁・文字数・文字コードを更新する (選択中のタブだけ)
+    /// ステータスバーの種別・行桁・文字数・文字コード・改行コードを更新する (選択中のタブだけ)
     pub fn update_status(&self) {
         if !self.is_current() {
             return;
@@ -1833,20 +2067,213 @@ impl Tab {
         let line = stc.get_current_line();
         let col = scintilla::count_characters(stc, stc.position_from_line(line), pos) + 1;
         let status = &self.host.status;
-        status.set_status_text(&tr(self.filetype().short_name_key()), 1);
-        status.set_status_text(
-            &tr_args(
-                "status.position",
-                &[("line", &(line + 1).to_string()), ("col", &col.to_string())],
-            ),
-            2,
-        );
-        status.set_status_text(
-            &tr_args("status.chars", &[("n", &self.char_count.get().to_string())]),
-            3,
-        );
+        let kind = tr(self.filetype().short_name_key());
+        let position =
+            |line: &str, col: &str| tr_args("status.position", &[("line", line), ("col", col)]);
+        let chars = |n: &str| tr_args("status.chars", &[("n", n)]);
+        let (line, col) = ((line + 1).to_string(), col.to_string());
+        let count = self.char_count.get().to_string();
         let encoding = self.doc.borrow().encoding.label();
+        status.set_status_text(&kind, 1);
+        status.set_status_text(&position(&line, &col), 2);
+        status.set_status_text(&chars(&count), 3);
         status.set_status_text(&encoding, 4);
+        self.host
+            .eol
+            .set(self.line_ending(), &self.eol_counts.get());
+        // 欄を中身の幅に詰める。行桁と文字数は桁を多めに取った文字で測り、数字が増えるたびに欄が
+        // 動かないようにする (行は 4 桁、桁は 3 桁、文字数は 5 桁までは同じ幅)
+        let reserve = |digits: &str, least: usize| "0".repeat(digits.len().max(least));
+        self.host.eol.fit(vec![
+            kind,
+            position(&reserve(&line, 4), &reserve(&col, 3)),
+            chars(&reserve(&count, 5)),
+            encoding,
+        ]);
+    }
+
+    /// 文字の幅を、半角の幅を 1 として返す関数 (全角文字は 2)。エディタのフォントで測り、同じ文字は
+    /// 1 回だけ測る。タブ位置の桁を数えるのに使う (エディタがタブをそろえる位置と同じ数え方になる)
+    fn char_width(&self) -> impl FnMut(char) -> usize {
+        let stc = self.stc;
+        let space = scintilla::text_width(&stc, editor::STYLE_DEFAULT, " ").max(1);
+        let mut measured: std::collections::HashMap<char, usize> = std::collections::HashMap::new();
+        move |c: char| {
+            if c.is_ascii() {
+                return 1;
+            }
+            *measured.entry(c).or_insert_with(|| {
+                let px =
+                    scintilla::text_width(&stc, editor::STYLE_DEFAULT, c.encode_utf8(&mut [0; 4]));
+                ((px + space / 2) / space).max(0) as usize
+            })
+        }
+    }
+
+    /// 行頭から `pos` までの文字列 (`pos` が行の中に無ければ None)
+    fn line_before(&self, pos: i32) -> Option<String> {
+        let stc = self.stc;
+        let line = stc.line_from_position(pos);
+        let start = stc.position_from_line(line);
+        let bytes = scintilla::line_bytes(&stc, line);
+        let before = bytes.get(..(pos - start).max(0) as usize)?;
+        String::from_utf8(before.to_vec()).ok()
+    }
+
+    /// Tab キー (スペースを入力する設定のとき): 次のタブ位置までのスペースを入れる。入れたら true。
+    ///
+    /// Scintilla に任せると、桁を文字数で数えるので (全角文字も 1 桁)、全角文字の後ろで入るスペースの
+    /// 数がずれ、表示上のタブ位置にそろわない。ここでは表示上の桁 (全角は 2 桁) で数える。
+    /// タブ文字を入力する設定のときと、複数行を選択しているとき (行ごとの字下げ) は Scintilla に任せる
+    fn insert_soft_tab(&self) -> bool {
+        let stc = self.stc;
+        let (tab, use_tabs) = {
+            let s = settings::get();
+            (s.editor.tab_width.clamp(1, 16) as usize, s.editor.use_tabs)
+        };
+        if use_tabs || scintilla::selections(&stc) > 1 {
+            return false;
+        }
+        let (start, end) = (stc.get_selection_start(), stc.get_selection_end());
+        if stc.line_from_position(start) != stc.line_from_position(end) {
+            return false;
+        }
+        let Some(before) = self.line_before(start) else {
+            return false;
+        };
+        let col = crate::tabs::column(&before, tab, self.char_width());
+        let count = crate::tabs::to_next_stop(col, tab);
+        // 選択範囲があれば置き換える (1 回の Undo で戻る)
+        stc.replace_selection(&" ".repeat(count));
+        stc.ensure_caret_visible();
+        true
+    }
+
+    /// Shift+Tab (字下げの外): キャレットを前のタブ位置へ戻す。動かしたら true。
+    /// 字下げの中 (行頭からキャレットまでが空白だけ) と、文字を選択しているときは Scintilla に任せる
+    /// (字下げを 1 段戻す)
+    fn back_tab(&self) -> bool {
+        let stc = self.stc;
+        if scintilla::selections(&stc) > 1 || stc.get_selection_start() != stc.get_selection_end() {
+            return false;
+        }
+        let pos = stc.get_current_pos();
+        let Some(before) = self.line_before(pos) else {
+            return false;
+        };
+        if before.bytes().all(|b| b == b' ' || b == b'\t') {
+            return false;
+        }
+        let tab = settings::get().editor.tab_width.clamp(1, 16) as usize;
+        let index = crate::tabs::previous_stop_index(&before, tab, self.char_width());
+        let target = pos - (before.len() - index) as i32;
+        stc.set_selection(target, target);
+        stc.ensure_caret_visible();
+        true
+    }
+
+    /// Backspace: キャレットの前のスペースを、設定 `editor.backspace` の動作に従ってまとめて消す
+    /// (どれだけ消すかは `settings::Backspace::count`)。消したら true。まとめて消すものが無ければ
+    /// 何もしない (呼ぶ側がふつうの Backspace にする)
+    fn backspace_to_tab_stop(&self) -> bool {
+        let stc = self.stc;
+        if stc.get_selection_start() != stc.get_selection_end() {
+            return false;
+        }
+        let pos = stc.get_current_pos();
+        let line = stc.get_current_line();
+        let start = stc.position_from_line(line);
+        if pos <= start {
+            return false;
+        }
+        let bytes = scintilla::line_bytes(&stc, line);
+        let Some(before) = bytes.get(..(pos - start) as usize) else {
+            return false;
+        };
+        let spaces = before.iter().rev().take_while(|b| **b == b' ').count();
+        // 1 個だけならふつうの Backspace と同じ
+        if spaces < 2 {
+            return false;
+        }
+        let Ok(prefix) = std::str::from_utf8(before) else {
+            return false;
+        };
+        let (mode, tab) = {
+            let s = settings::get();
+            (s.editor.backspace, s.editor.tab_width.clamp(1, 16) as usize)
+        };
+        let col = crate::tabs::column(prefix, tab, self.char_width());
+        let in_indent = before.iter().all(|b| *b == b' ' || *b == b'\t');
+        let count = mode.count(col, spaces, in_indent, tab) as i32;
+        if count == 0 {
+            return false;
+        }
+        stc.delete_range(pos - count, count);
+        true
+    }
+
+    /// 文書のタブをスペースに (`to_spaces`)、またはスペースの並びをタブに、一括で変換する
+    /// (編集 > タブをスペースに変換 / スペースをタブに変換)。何か変えたら true。1 回の Undo で戻せる。
+    ///
+    /// 桁は半角の幅を 1 として、エディタのフォントで測った文字の幅で数える (全角文字は 2)。エディタが
+    /// タブをそろえる位置と同じ数え方なので、変換の前後で文字の位置は変わらない
+    pub fn convert_tabs(&self, to_spaces: bool) -> bool {
+        let stc = self.stc;
+        let tab = settings::get().editor.tab_width.clamp(1, 16) as usize;
+        let text = self.text();
+        let width = self.char_width();
+        let converted = if to_spaces {
+            crate::tabs::expand(&text, tab, width)
+        } else {
+            crate::tabs::tabify(&text, tab, width)
+        };
+        if converted == text {
+            return false;
+        }
+        // 文書全体を 1 回で置き換える (変更の通知も 1 回)。キャレットのある行と表示位置は保つ
+        let line = stc.get_current_line();
+        let first = scintilla::first_visible_line(&stc);
+        scintilla::begin_undo_action(&stc);
+        stc.set_target_start(0);
+        stc.set_target_end(stc.get_length());
+        scintilla::replace_target(&stc, &converted, false);
+        scintilla::end_undo_action(&stc);
+        let pos = stc.position_from_line(line.min(stc.get_line_count() - 1).max(0));
+        stc.set_selection(pos, pos);
+        scintilla::set_first_visible_line(&stc, first);
+        true
+    }
+
+    /// 文書の改行コード (Enter で入る改行。開いたときにファイルで一番多いものに合わせてある)
+    pub fn line_ending(&self) -> LineEnding {
+        scintilla::eol_mode(&self.stc)
+    }
+
+    /// 文書のすべての改行を `eol` にそろえ、これから入力する改行も合わせる。改行が変われば文書は
+    /// 未保存になり、1 回の Undo で戻せる (Undo しても、これから入力する改行は `eol` のまま)
+    pub fn convert_line_endings(&self, eol: LineEnding) {
+        scintilla::convert_eols(&self.stc, eol);
+        scintilla::set_eol_mode(&self.stc, eol);
+        if self.large.get() {
+            // 軽量モードは変更のたびに全文を見ないので、数え直す代わりに「そろった」ことだけ反映する
+            let counts = self.eol_counts.get();
+            let total = counts.crlf + counts.lf + counts.cr;
+            self.eol_counts.set(match eol {
+                LineEnding::Crlf => EolCounts {
+                    crlf: total,
+                    ..Default::default()
+                },
+                LineEnding::Lf => EolCounts {
+                    lf: total,
+                    ..Default::default()
+                },
+                LineEnding::Cr => EolCounts {
+                    cr: total,
+                    ..Default::default()
+                },
+            });
+        }
+        self.update_status();
     }
 
     fn apply_actionbar_setting(&self, settings: &Settings) {
@@ -1875,6 +2302,8 @@ impl Tab {
     /// 設定ダイアログで変えられる項目を反映する (`before` は変更前の設定)
     pub fn apply_settings(&self, before: &Settings, settings: &Settings) {
         editor::apply_settings(&self.stc, settings);
+        // 不可視文字の記号 (表示の有無や、比べる改行コード) は、エディタを描き直すと変わる
+        self.stc.refresh(true, None);
         self.ruler.window().show(settings.editor.show_ruler);
         self.gutter
             .window()

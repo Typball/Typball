@@ -302,4 +302,18 @@ wxd_Window_ProcessMenuCommand(wxd_Window_t* window, int id);
 WXD_EXPORTED void
 wxd_Window_PostMenuCommand(wxd_Window_t* window, int id);
 
+// Typball patch: call `callback` every time the window has painted itself, still inside the
+// same paint (after the window's own paint handler has returned, so after a buffered paint DC
+// has been copied). `dc` draws into that paint and is only valid during the call; the rectangle
+// is the area that was repainted. `composing` is non-zero while an input method is composing
+// text in the window (MSW; the window is repainted when that starts and ends). The window is
+// made double buffered, so that what the window and the callback draw reaches the screen
+// together. `release(userdata)` is called when the window is destroyed.
+typedef void (*wxd_AfterPaintCallback)(void* userdata, wxd_DC_t* dc, int x, int y, int width,
+                                       int height, int composing);
+typedef void (*wxd_AfterPaintRelease)(void* userdata);
+WXD_EXPORTED void
+wxd_Window_BindAfterPaint(wxd_Window_t* window, wxd_AfterPaintCallback callback, void* userdata,
+                          wxd_AfterPaintRelease release);
+
 #endif // WXD_WINDOW_BASE_H
