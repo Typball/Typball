@@ -68,7 +68,9 @@ fn collect_headings(node: &LinkedNode, text: &str, out: &mut Vec<OutlineItem>) {
 fn markdown_outline(text: &str) -> Vec<OutlineItem> {
     let mut out = Vec::new();
     let mut in_fence = false;
-    for (line, raw) in text.lines().enumerate() {
+    // 冒頭のメタ情報 (front matter) の中の `# コメント` は見出しではない
+    let skip = front_matter_lines(text);
+    for (line, raw) in text.lines().enumerate().skip(skip) {
         let s = raw.trim_start();
         if s.starts_with("```") || s.starts_with("~~~") {
             in_fence = !in_fence;
@@ -93,6 +95,19 @@ fn markdown_outline(text: &str) -> Vec<OutlineItem> {
         });
     }
     out
+}
+
+/// 冒頭のメタ情報 (`---` で囲んだ YAML、`+++` で囲んだ TOML) の行数。無ければ 0
+fn front_matter_lines(text: &str) -> usize {
+    let mut lines = text.lines();
+    let closes: &[&str] = match lines.next().map(str::trim_end) {
+        Some("---") => &["---", "..."],
+        Some("+++") => &["+++"],
+        _ => return 0,
+    };
+    lines
+        .position(|line| closes.contains(&line.trim_end()))
+        .map_or(0, |i| i + 2)
 }
 
 /// バイトオフセットが属する 0 始まりの行番号
@@ -122,6 +137,22 @@ mod tests {
             (items[2].level, items[2].line, items[2].text.as_str()),
             (3, 5, "Deep")
         );
+    }
+
+    #[test]
+    fn markdown_headings_skip_front_matter() {
+        // 冒頭のメタ情報の中の `# コメント` は見出しにしない。行番号はずれない
+        let src = "---\ntitle: x\n# comment\n---\n\n# A\n";
+        let items = markdown_outline(src);
+        assert_eq!(items.len(), 1);
+        assert_eq!((items[0].line, items[0].text.as_str()), (5, "A"));
+        let src = "+++\n# comment\n+++\n# B\n";
+        let items = markdown_outline(src);
+        assert_eq!(items.len(), 1);
+        assert_eq!((items[0].line, items[0].text.as_str()), (3, "B"));
+        // 閉じていなければメタ情報ではない (横線と見出し)
+        let src = "---\n# C\n";
+        assert_eq!(markdown_outline(src).len(), 1);
     }
 
     #[test]

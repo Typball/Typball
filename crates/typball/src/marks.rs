@@ -135,9 +135,8 @@ fn line_ending_of(stc: &StyledTextCtrl, line: i32, count: i32) -> Option<LineEnd
 struct Metrics {
     /// 半角 1 文字の幅
     cell: i32,
-    /// 細い線・強調の線の太さ
+    /// 線の太さ
     thin: i32,
-    bold: i32,
     /// 矢じりの大きさ
     head: i32,
 }
@@ -174,7 +173,6 @@ pub fn paint(
     let m = Metrics {
         cell,
         thin,
-        bold: thin * 2,
         head: (cell * 3 / 8).max(2),
     };
     let colours = crate::editor::colors();
@@ -263,11 +261,14 @@ pub fn paint(
         }
         match line_ending_of(stc, line, count) {
             Some(eol) if e.show_eol => {
-                if eol == base {
-                    pen(colours.mark, m.thin);
+                // 設定と違う改行は色で強調する。線は同じ細さ: 太いペンは線の左右どちらかに寄って
+                // 描かれるので、矢印が左右対称にならない。矢印は太さ 1 のペンで塗って描く (fill)
+                let colour = if eol == base {
+                    colours.mark
                 } else {
-                    pen(different_colour(eol), m.bold);
-                }
+                    different_colour(eol)
+                };
+                pen(colour, 1);
                 let (x, y) = point(end);
                 draw_line_ending(dc, &m, eol, x + m.thin, y, height);
             }
@@ -334,33 +335,59 @@ fn draw_wide_space(dc: &PaintDc, x: i32, y: i32, width: i32, height: i32) {
 /// 改行: 行末のすぐ後ろに矢印。LF は下向き、CR は左向き、CRLF は下りてから左へ折れる。
 /// どれも半角 1 文字の幅に収める
 fn draw_line_ending(dc: &PaintDc, m: &Metrics, eol: LineEnding, x: i32, y: i32, height: i32) {
+    let t = m.thin;
     let top = y + height / 5;
+    // 矢印の下の端 (この行まで描く)
     let bottom = y + height - (height / 5).max(2);
-    // 横向きの矢印の左右の端 (半角 1 文字ぶんの中)
+    // 横向きの矢印の左右の端 (半角 1 文字ぶんの中。`right` の列まで描く)
     let left = x + 1;
     let right = x + m.cell - 2;
     // 横向きの矢じりは、幅に収まるように小さめにする
     let head = m.head.min((right - left) / 2).max(2);
     match eol {
         LineEnding::Lf => {
-            let centre = x + m.cell / 2;
-            stroke(dc, centre, top, centre, bottom);
-            stroke(dc, centre, bottom, centre - m.head, bottom - m.head);
-            stroke(dc, centre, bottom, centre + m.head, bottom - m.head);
+            // 軸は 1 文字の幅の中央。矢じりは軸の左右に同じだけ開く
+            let shaft = x + (m.cell - t) / 2;
+            fill(dc, shaft, top, t, bottom + 1 - top);
+            head_down(dc, shaft, bottom, t, m.head);
         }
         LineEnding::Cr => {
-            let mid = y + height * 11 / 20;
-            stroke(dc, left, mid, right, mid);
-            stroke(dc, left, mid, left + head, mid - head);
-            stroke(dc, left, mid, left + head, mid + head);
+            let shaft = y + height * 11 / 20 - t / 2;
+            fill(dc, left, shaft, right + 1 - left, t);
+            // 折れ曲がりが無いぶん、矢じりは LF と同じ大きさまで取れる
+            head_left(dc, left, shaft, t, m.head.min(right - left - 2).max(2));
         }
         LineEnding::Crlf => {
-            let low = bottom - head;
-            stroke(dc, right, top, right, low);
-            stroke(dc, right, low, left, low);
-            stroke(dc, left, low, left + head, low - head);
-            stroke(dc, left, low, left + head, low + head);
+            // 矢じりの下の端が `bottom` に来る高さで左へ折れる
+            let shaft = bottom + 1 - t - head;
+            fill(dc, right + 1 - t, top, t, shaft + t - top);
+            fill(dc, left, shaft, right + 1 - left, t);
+            head_left(dc, left, shaft, t, head);
         }
+    }
+}
+
+/// 斜めの線 (45°) の、1 行 (1 列) ぶんの長さ。太さ `t` の線に見える長さ (t × √2 を丸めたもの)
+fn diagonal(t: i32) -> i32 {
+    ((t * 14 + 5) / 10).max(1)
+}
+
+/// 下向きの矢じり: 軸 (左端 `shaft`・太さ `t`) の先 (`tip` の行) から、左右へ `size` 画素ずつ斜めに上がる。
+/// 1 行ずつ、軸をはさんで左右同じ位置に打つので、必ず左右対称になる
+fn head_down(dc: &PaintDc, shaft: i32, tip: i32, t: i32, size: i32) {
+    let d = diagonal(t);
+    for step in 1..=size {
+        fill(dc, shaft - step, tip - step, d, 1);
+        fill(dc, shaft + t + step - d, tip - step, d, 1);
+    }
+}
+
+/// 左向きの矢じり: 軸 (上端 `shaft`・太さ `t`) の先 (`tip` の列) から、上下へ `size` 画素ずつ斜めに開く
+fn head_left(dc: &PaintDc, tip: i32, shaft: i32, t: i32, size: i32) {
+    let d = diagonal(t);
+    for step in 1..=size {
+        fill(dc, tip + step, shaft - step, 1, d);
+        fill(dc, tip + step, shaft + t + step - d, 1, d);
     }
 }
 

@@ -22,6 +22,7 @@ use typst_syntax::{highlight, LinkedNode, Tag};
 use wxdragon::prelude::*;
 
 use crate::filetype::FileType;
+use crate::mdstyle::Style;
 use crate::scintilla;
 use crate::settings::{SavedChanges, Settings, Wrap};
 
@@ -34,6 +35,8 @@ const STYLE_BRACEBAD: i32 = 35;
 const STYLE_MARGIN: i32 = 40;
 const STYLE_MARGIN_MODIFIED: i32 = 41;
 const STYLE_MARGIN_SAVED: i32 = 42;
+/// Markdown のコードブロックの中のコード用 (ここから 1 + タグの数だけ使う。[`code_style_of`])
+const STYLE_CODE: i32 = 64;
 
 const MARGIN_CHANGES: i32 = 0;
 const MARGIN_LINENUMBERS: i32 = 1;
@@ -172,6 +175,11 @@ fn style_of(tag: Tag) -> i32 {
     tag as i32 + 1
 }
 
+/// Markdown のコードブロックの中のコードのスタイル番号: 字句の種類が無ければ STYLE_CODE、あればその次から
+fn code_style_of(tag: Option<Tag>) -> i32 {
+    STYLE_CODE + tag.map_or(0, style_of)
+}
+
 /// 各タグの配色 (ライトは VS Code Light+ 風、ダークは Dark+ 風)。(前景色, 太字, 斜体, 下線)
 fn tag_appearance(tag: Tag, dark: bool) -> (u32, bool, bool, bool) {
     let (light, dark_fg, bold, italic, underline) = match tag {
@@ -305,6 +313,18 @@ fn apply_colors(stc: &StyledTextCtrl, settings: &Settings) {
     }
     // raw ブロックは背景を薄く
     stc.style_set_background(style_of(Tag::Raw), rgb(c.raw_bg));
+    // Markdown のコードブロックの中のコード: 同じ背景の上に、字句の種類ごとの色 (種類の無い字句は本文の色)
+    stc.style_set_foreground(STYLE_CODE, rgb(c.text));
+    stc.style_set_background(STYLE_CODE, rgb(c.raw_bg));
+    for tag in ALL_TAGS {
+        let (fg, bold, italic, underline) = tag_appearance(tag, dark);
+        let s = code_style_of(Some(tag));
+        stc.style_set_foreground(s, rgb(fg));
+        stc.style_set_background(s, rgb(c.raw_bg));
+        stc.style_set_bold(s, bold);
+        stc.style_set_italic(s, italic);
+        stc.style_set_underline(s, underline);
+    }
 
     // 行番号マージン。STYLE_LINENUMBER の背景色がマージン全体の地になり、
     // 文字は行ごとに STYLE_MARGIN / STYLE_MARGIN_MODIFIED (太字) / STYLE_MARGIN_SAVED で描かれる
@@ -802,10 +822,23 @@ mod tests {
     }
 }
 
-/// 全文にスタイルを付ける。Typst は typst-syntax で解析して葉ノードごとに色分けし、
-/// それ以外の種別は既定スタイルに戻す (Markdown のハイライトは未実装)。
-/// Scintilla の位置は UTF-8 バイト単位、typst-syntax の span もバイト単位なので一致する。
+/// 全文にスタイルを付ける。Typst は typst-syntax で解析して葉ノードごとに色分けし、Markdown は
+/// pulldown-cmark で解析して要素ごとに色分けする (`mdstyle`。色は Typst と同じタグのもの)。
+/// それ以外の種別は既定スタイルに戻す。
+/// Scintilla の位置は UTF-8 バイト単位、どちらの解析結果もバイト単位なので一致する。
 pub fn restyle(stc: &StyledTextCtrl, text: &str, filetype: FileType) {
+    if filetype == FileType::Md {
+        stc.start_styling(0);
+        for (len, style) in crate::mdstyle::runs(text) {
+            let style = match style {
+                Style::Plain => 0,
+                Style::Tag(tag) => style_of(tag),
+                Style::Code(tag) => code_style_of(tag),
+            };
+            stc.set_styling(len as i32, style);
+        }
+        return;
+    }
     if filetype != FileType::Typ {
         stc.start_styling(0);
         stc.set_styling(text.len() as i32, 0);

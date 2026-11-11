@@ -22,7 +22,7 @@ use pulldown_cmark::{html, CodeBlockKind, CowStr, Event, Options, Parser, Tag, T
 use syntect::easy::HighlightLines;
 use syntect::highlighting::Theme;
 use syntect::html::{styled_line_to_highlighted_html, IncludeBackground};
-use syntect::parsing::SyntaxSet;
+use syntect::parsing::{SyntaxReference, SyntaxSet};
 use syntect::util::LinesWithEndings;
 use two_face::theme::{EmbeddedLazyThemeSet, EmbeddedThemeName};
 
@@ -56,7 +56,7 @@ pub struct Output {
     pub title: Option<String>,
 }
 
-fn options() -> Options {
+pub(crate) fn options() -> Options {
     Options::ENABLE_TABLES
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_STRIKETHROUGH
@@ -131,11 +131,7 @@ pub fn render(markdown: &str, ctx: &Context) -> Output {
                 }
                 depth += 1;
                 let lang = match kind {
-                    CodeBlockKind::Fenced(info) => info
-                        .split(|c: char| c.is_whitespace() || c == ',' || c == '{')
-                        .next()
-                        .unwrap_or("")
-                        .to_string(),
+                    CodeBlockKind::Fenced(info) => code_lang(&info).to_string(),
                     CodeBlockKind::Indented => String::new(),
                 };
                 code = Some((lang, String::new()));
@@ -586,9 +582,26 @@ impl LineIndex {
 // コードの色付け
 // ---------------------------------------------------------------------------
 
-fn syntax_set() -> &'static SyntaxSet {
+pub(crate) fn syntax_set() -> &'static SyntaxSet {
     static SET: OnceLock<SyntaxSet> = OnceLock::new();
     SET.get_or_init(two_face::syntax::extra_newlines)
+}
+
+/// コードブロックの囲みに書いた文字列 (```` ```rust,ignore ```` の `rust,ignore`) から言語名を取り出す
+pub(crate) fn code_lang(info: &str) -> &str {
+    info.split(|c: char| c.is_whitespace() || c == ',' || c == '{')
+        .next()
+        .unwrap_or("")
+}
+
+/// 言語名 (`rust`、`py` など。拡張子でもよい) の構文定義。空・知らない名前なら None
+pub(crate) fn find_syntax(lang: &str) -> Option<&'static SyntaxReference> {
+    if lang.is_empty() {
+        return None;
+    }
+    let set = syntax_set();
+    set.find_syntax_by_token(lang)
+        .or_else(|| set.find_syntax_by_extension(lang))
 }
 
 fn theme(dark: bool) -> &'static Theme {
@@ -615,13 +628,7 @@ fn highlight_block(lang: &str, code: &str, dark: bool) -> String {
     };
     let mut out = format!("<pre class=\"tb-code\"><code{lang_attr}>");
     let set = syntax_set();
-    let syntax = (!lang.is_empty())
-        .then(|| {
-            set.find_syntax_by_token(lang)
-                .or_else(|| set.find_syntax_by_extension(lang))
-        })
-        .flatten();
-    match syntax {
+    match find_syntax(lang) {
         Some(syntax) => {
             let mut highlighter = HighlightLines::new(syntax, theme(dark));
             for line in LinesWithEndings::from(code) {

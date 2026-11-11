@@ -56,6 +56,7 @@ mod ime_win;
 mod instance;
 mod marks;
 mod mdhtml;
+mod mdstyle;
 mod outline;
 mod pane;
 mod preview;
