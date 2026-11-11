@@ -2,6 +2,7 @@
 //!
 //! - `window.rs`          メインウィンドウ (メニュー・タブ管理・ファイル操作・外部変更の監視)
 //! - `viewer.rs`          プレビュー専用ウィンドウ (`--view`、ファイル → プレビューウィンドウで開く)
+//! - `assoc.rs`           ファイルの関連付け (設定 → 関連付け。Windows のレジストリ / XDG / Launch Services)
 //! - `appicon.rs`         ウィンドウのアイコン (Windows は exe に埋め込んだアイコン) とバージョン情報の大きな絵
 //! - `tabbar.rs`          自前描画のタブバー (アイコン・閉じるボタン・ドラッグ)
 //! - `tab.rs`             1 タブ分のページ (アウトライン | ツールバー + ルーラー + エディタ + 行番号 | プレビュー)
@@ -36,6 +37,7 @@
 mod actionbar;
 mod actions;
 mod appicon;
+mod assoc;
 mod background;
 mod backup;
 #[cfg(windows)]
@@ -86,15 +88,18 @@ use i18n::tr_args;
 use instance::{Claim, Request};
 use settings::{InstanceMode, OpenMode, Settings};
 use window::WindowRef;
+use wxdragon::AppEvents;
 
 /// コマンドライン: 開き方 (`--edit` = エディタ、`--view` = プレビュー専用ウィンドウ。どちらも無ければ
 /// 形式ごとの設定 `[filetypes.*] open_mode`)、`--new-instance` (先行プロセスに渡さず別プロセスで起動)、
 /// `--wait-pid <pid>` (更新で再起動したとき: 古いプロセスの終了を待ってから起動する)、
+/// `--unregister-associations` (この Typball の関連付けを解除して終わる。アンインストーラーが呼ぶ)、
 /// 開くファイル (絶対パスにして返す)
 struct Args {
     mode: Option<OpenMode>,
     new_instance: bool,
     wait_pid: Option<u32>,
+    unregister_associations: bool,
     files: Vec<PathBuf>,
 }
 
@@ -104,6 +109,7 @@ fn parse_args() -> Args {
         mode: None,
         new_instance: false,
         wait_pid: None,
+        unregister_associations: false,
         files: Vec::new(),
     };
     let mut raw = std::env::args_os().skip(1);
@@ -118,6 +124,10 @@ fn parse_args() -> Args {
         }
         if arg == "--new-instance" {
             args.new_instance = true;
+            continue;
+        }
+        if arg == assoc::UNREGISTER_ARG {
+            args.unregister_associations = true;
             continue;
         }
         if arg == update::WAIT_PID_ARG {
@@ -136,6 +146,12 @@ fn parse_args() -> Args {
 
 fn main() {
     let args = parse_args();
+    // アンインストーラーから: 設定 → 関連付け でこの Typball に登録した関連付けを解除して終わる
+    // (ウィンドウは出さない。先に動いている Typball にも渡さない)
+    if args.unregister_associations {
+        assoc::unregister_own();
+        return;
+    }
     // 更新で再起動した: 古いプロセスが終わるのを待つ。待たないと、まだ動いている古いプロセスを
     // 「先に動いている Typball」とみなしてファイルを渡して終わってしまう (シングルインスタンス)。
     // 古いプロセスが閉じるときに保存する設定 (ウィンドウの位置) を読むためにも、設定より先に待つ
@@ -164,7 +180,18 @@ fn main() {
     std::thread::spawn(typball_core::warm_up);
     // コードの色付け用の構文定義の読み込みも同様
     std::thread::spawn(mdhtml::warm_up);
-    let _ = wxdragon::main(move |_| {
+    let _ = wxdragon::main(move |app| {
+        // macOS: Finder でファイルを開く (関連付けのダブルクリック、Dock へのドロップ) と、引数ではなく
+        // Apple イベントで届く。起動のきっかけになったファイルも、ウィンドウを作った後にここへ届く。
+        // 他の OS では何も起きない (wxDragon が macOS だけ実装している)
+        app.on_open_files(|files| {
+            let request = Request {
+                mode: None,
+                files: files.into_iter().map(PathBuf::from).collect(),
+            };
+            wxdragon::call_after(Box::new(move || open_request(request)));
+            wxdragon::wake_up_idle();
+        });
         // 同梱フォント (エディタの UDEV Gothic・プレビューの Noto Sans JP) を wx の部品から名前で使えるよう
         // このプロセスに登録する。GTK は wx の初期化後でないと登録できないのでここで、ウィンドウを作る前に
         fonts::register_embedded();

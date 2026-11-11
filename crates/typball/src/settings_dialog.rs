@@ -12,6 +12,7 @@ use std::rc::Rc;
 use wxdragon::id::{ID_CANCEL, ID_HIGHEST, ID_OK};
 use wxdragon::prelude::*;
 
+use crate::assoc;
 use crate::fileio::{Encoding, LineEnding};
 use crate::filetype::FileType;
 use crate::i18n::{self, tr, tr_args};
@@ -29,7 +30,7 @@ type PageBuilder = fn(&Panel, &Settings, &mut Readers, &Dialog);
 
 /// ページの並び: (タイトルのキー, 中身を作る関数, 直前の親ページの子か)。
 /// 子ページは Treebook で親の下にぶら下がる (ファイル → 形式ごとの設定)
-const PAGES: [(&str, PageBuilder, bool); 9] = [
+const PAGES: [(&str, PageBuilder, bool); 10] = [
     ("settings.general.title", page_general, false),
     ("settings.display.title", page_display, false),
     ("settings.editor.title", page_editor, false),
@@ -38,6 +39,7 @@ const PAGES: [(&str, PageBuilder, bool); 9] = [
     ("filetype.md", page_filetype_md, true),
     ("filetype.typ", page_filetype_typ, true),
     ("settings.preview.title", page_preview, false),
+    ("settings.assoc.title", page_assoc, false),
     ("settings.update.title", page_update, false),
 ];
 
@@ -1364,6 +1366,434 @@ fn page_preview(panel: &Panel, current: &Settings, readers: &mut Readers, _dialo
     }));
 }
 
+// ---------------------------------------------------------------------------
+// 関連付け (OS への登録。Settings.toml には保存せず、操作はその場で OS に反映する)
+// ---------------------------------------------------------------------------
+
+/// 関連付けのアイコンの見本の一辺 (DIP)
+const ASSOC_ICON_SIZE: i32 = 32;
+
+/// 関連付けのページの 1 行 (1 形式ぶん) の部品
+#[derive(Clone)]
+struct AssocRow {
+    kind: assoc::Kind,
+    /// 行を載せているページ (表示を変えた後に並べ直す)
+    panel: Panel,
+    /// 「既定のアプリ: ...」
+    default_text: StaticText,
+    /// 「Typball: 登録済み」など
+    registered_text: StaticText,
+    unregister: Button,
+    /// アイコンの見本と選択肢 (アイコンを選べる OS だけ)
+    icon: Option<(StaticBitmap, Choice)>,
+    /// 選んであるアイコン。未登録のうちは、次に関連付けるときに使う
+    chosen: Rc<RefCell<assoc::Icon>>,
+}
+
+impl AssocRow {
+    /// OS に今の状態を聞いて表示を合わせる
+    fn refresh(&self) {
+        let status = assoc::status(self.kind);
+        let default_text = match &status.default_app {
+            None => tr("settings.assoc.default_none"),
+            Some(app) if app.is_self => {
+                tr_args("settings.assoc.default_self", &[("name", &app.name)])
+            }
+            Some(app) => tr_args("settings.assoc.default_app", &[("name", &app.name)]),
+        };
+        // 長いパスで行が伸びないよう幅は固定してあるので、全文はツールチップで読めるようにする
+        let default_tip = match status.default_app.as_ref().and_then(|a| a.path.as_ref()) {
+            Some(path) => format!("{default_text}\n{}", path.display()),
+            None => default_text.clone(),
+        };
+        self.default_text.set_label(&default_text);
+        self.default_text.set_tooltip(&default_tip);
+
+        match &status.registered {
+            assoc::Registered::No => {
+                set_path_label(&self.registered_text, "", |_| {
+                    tr("settings.assoc.registered_no")
+                });
+            }
+            assoc::Registered::This => {
+                set_path_label(&self.registered_text, "", |_| {
+                    tr("settings.assoc.registered_this")
+                });
+            }
+            assoc::Registered::Other(path) => {
+                set_path_label(&self.registered_text, &path.display().to_string(), |p| {
+                    tr_args("settings.assoc.registered_other", &[("path", p)])
+                });
+            }
+        }
+        self.unregister.enable(status.removable);
+
+        // 登録済みならそのアイコンを、未登録なら選びかけのアイコンを見せる
+        if status.registered != assoc::Registered::No {
+            *self.chosen.borrow_mut() = status.icon;
+        }
+        self.show_icon();
+        // wxStaticText は文字を入れ替えると自分の大きさを文字に合わせ直すので、サイザーの決めた幅に戻す
+        self.panel.layout();
+    }
+
+    /// 選んであるアイコンを見本と選択肢に反映する
+    fn show_icon(&self) {
+        let Some((preview, choice)) = &self.icon else {
+            return;
+        };
+        let chosen = self.chosen.borrow().clone();
+        let (index, tip) = match &chosen {
+            assoc::Icon::Document => (0, String::new()),
+            assoc::Icon::App => (1, String::new()),
+            assoc::Icon::Custom(value) => (2, value.clone()),
+        };
+        choice.set_selection(index);
+        choice.set_tooltip(&tip);
+        let size = preview.from_dip_int(ASSOC_ICON_SIZE) as u32;
+        // 取り出せないアイコン (消えたファイルなど) は空の見本にする
+        let rgba = assoc::icon_rgba(self.kind, &chosen, size)
+            .unwrap_or_else(|| vec![0; (size * size * 4) as usize]);
+        if let Some(bitmap) = Bitmap::from_rgba(&rgba, size, size) {
+            preview.set_bitmap(&bitmap);
+        }
+    }
+}
+
+/// OS に登録する文字列 (右クリックメニューの項目名) を今の表示言語で作る
+fn assoc_labels() -> assoc::Labels {
+    assoc::Labels {
+        open: tr("settings.assoc.verb_open"),
+        edit: tr("settings.assoc.verb_edit"),
+        view: tr("settings.assoc.verb_view"),
+    }
+}
+
+/// 関連付けの操作の結果を受けて、失敗なら知らせる
+fn assoc_report(dialog: &Dialog, result: Result<(), String>) {
+    if let Err(error) = result {
+        MessageDialog::builder(
+            dialog,
+            &tr_args("settings.assoc.error", &[("error", &error)]),
+            "Typball",
+        )
+        .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconError)
+        .build()
+        .show_modal();
+    }
+}
+
+fn page_assoc(panel: &Panel, _current: &Settings, _readers: &mut Readers, dialog: &Dialog) {
+    let px = |v: i32| panel.from_dip_int(v);
+    let caps = assoc::capabilities();
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+
+    let intro = StaticText::builder(panel)
+        .with_label(&tr("settings.assoc.intro"))
+        .build();
+    sizer.add(&intro, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
+
+    // 登録する Typball の場所 (開発版とインストール版のように複数あるとき、どれを登録するのかが分かるように)
+    let target = assoc::target()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    // 見出しの次の行にパスを置き、下の形式の一覧とは間を空ける (1 行に続けると詰まって見える)
+    sizer.add(
+        &label(panel, "settings.assoc.target"),
+        0,
+        SizerFlag::Left | SizerFlag::Right,
+        px(GAP),
+    );
+    // 文字は並べ終えてから入れる (幅に収まらないパスは途中を省略する)
+    let target_label = StaticText::builder(panel).build();
+    target_label.set_min_size(Size::new(px(120), -1));
+    sizer.add_spacer(px(4));
+    sizer.add(
+        &target_label,
+        0,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right,
+        px(GAP),
+    );
+    sizer.add_spacer(px(GAP * 2));
+
+    let rows: Rc<Vec<AssocRow>> = Rc::new(
+        [
+            (assoc::Kind::Txt, FileType::Txt),
+            (assoc::Kind::Md, FileType::Md),
+            (assoc::Kind::Typ, FileType::Typ),
+        ]
+        .into_iter()
+        .map(|(kind, ft)| assoc_row(panel, &sizer, dialog, kind, ft, caps))
+        .collect(),
+    );
+    let refresh_all = {
+        let rows = rows.clone();
+        move || rows.iter().for_each(AssocRow::refresh)
+    };
+
+    // まとめて操作するボタンと、OS の設定画面への入口
+    let buttons = BoxSizer::builder(Orientation::Horizontal).build();
+    let register_all = Button::builder(panel)
+        .with_label(&tr("settings.assoc.register_all"))
+        .build();
+    let unregister_all = Button::builder(panel)
+        .with_label(&tr("settings.assoc.unregister_all"))
+        .build();
+    buttons.add(&register_all, 0, SizerFlag::Right, px(GAP));
+    buttons.add(&unregister_all, 0, SizerFlag::Right, px(GAP));
+    register_all.on_click({
+        let (rows, refresh_all, dialog) = (rows.clone(), refresh_all.clone(), dialog.clone());
+        move |_| {
+            let labels = assoc_labels();
+            let result = rows.iter().try_for_each(|row| {
+                let icon = row.chosen.borrow().clone();
+                assoc::register(row.kind, &icon, &labels)
+            });
+            refresh_all();
+            assoc_report(&dialog, result);
+        }
+    });
+    unregister_all.on_click({
+        let (rows, refresh_all, dialog) = (rows.clone(), refresh_all.clone(), dialog.clone());
+        move |_| {
+            // 解除できるもの (自分で登録した分) だけを解除する
+            let result = rows
+                .iter()
+                .filter(|row| assoc::status(row.kind).removable)
+                .try_for_each(|row| assoc::unregister(row.kind));
+            refresh_all();
+            assoc_report(&dialog, result);
+        }
+    });
+    if caps.system_settings {
+        let open_settings = Button::builder(panel)
+            .with_label(&tr("settings.assoc.open_settings"))
+            .build();
+        buttons.add_stretch_spacer(1);
+        buttons.add(&open_settings, 0, SizerFlag::AlignLeft, 0);
+        open_settings.on_click(|_| assoc::open_system_settings());
+    }
+    sizer.add_sizer(&buttons, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
+
+    // OS ごとの注意書き。関連付けを変えられないとき (macOS で .app として動いていない) はその理由
+    let note = StaticText::builder(panel)
+        .with_label(&tr(caps.unavailable.unwrap_or(caps.note)))
+        .build();
+    sizer.add(
+        &note,
+        0,
+        SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
+        px(GAP),
+    );
+    panel.set_sizer(sizer, true);
+    // 折り返しはサイザーに入れてから (page_preview と同じ)
+    intro.wrap(px(520));
+    note.wrap(px(520));
+
+    if caps.unavailable.is_some() {
+        register_all.enable(false);
+        unregister_all.enable(false);
+    }
+    // 各行の幅が決まってから文字を入れる (幅に合わせてパスを省略するため)
+    panel.layout();
+    set_path_label(&target_label, &target, str::to_string);
+    refresh_all();
+    // 他のアプリや Windows の設定画面で変えた結果を、ダイアログに戻ってきたときに映す
+    dialog.on_activate({
+        let refresh_all = refresh_all.clone();
+        move |event| {
+            if let WindowEventData::Activate(activate) = &event {
+                if activate.is_active() {
+                    refresh_all();
+                }
+            }
+        }
+    });
+}
+
+/// パスの入った文を `label` に入れる。幅に収まらなければパスの途中を省略する (全文はツールチップ)。
+/// wxStaticText は収まらない文を空白のところで折り返すので、そのままだと 1 行ぶんの高さの中に
+/// パスが入らず見えなくなる。`path` が空なら `make` の結果をそのまま入れる
+fn set_path_label(label: &StaticText, path: &str, make: impl Fn(&str) -> String) {
+    let full = make(path);
+    label.set_tooltip(&full);
+    let width = label.get_size().width;
+    let mut keep = path.chars().count();
+    let mut text = full;
+    while width > 0 && keep > 8 && label.get_text_extent(&text).width > width {
+        keep -= (keep / 8).max(1);
+        text = make(&shorten_middle(path, keep));
+    }
+    label.set_label(&text);
+}
+
+/// 文字列の途中を「…」にして `max` 文字に収める (パスは先頭のドライブと末尾のファイル名が手がかりになる)
+fn shorten_middle(text: &str, max: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max {
+        return text.to_string();
+    }
+    let keep = max.saturating_sub(1);
+    let head = keep / 2;
+    let tail = &chars[chars.len() - (keep - head)..];
+    chars[..head].iter().chain(&['…']).chain(tail).collect()
+}
+
+/// 関連付けのページに 1 形式ぶんの行を足す:
+/// アイコンの見本 | 形式の名前・今の既定のアプリ・Typball の登録状況 | アイコンの選択・関連付ける・解除
+fn assoc_row(
+    panel: &Panel,
+    sizer: &BoxSizer,
+    dialog: &Dialog,
+    kind: assoc::Kind,
+    ft: FileType,
+    caps: assoc::Capabilities,
+) -> AssocRow {
+    let px = |v: i32| panel.from_dip_int(v);
+    let line = BoxSizer::builder(Orientation::Horizontal).build();
+
+    // アイコンの見本 (中身は refresh で入れる)
+    let preview = caps.icons.then(|| {
+        let size = px(ASSOC_ICON_SIZE);
+        let empty = vec![0u8; (size * size * 4) as usize];
+        let bitmap = Bitmap::from_rgba(&empty, size as u32, size as u32);
+        let preview = StaticBitmap::builder(panel)
+            .with_bitmap(bitmap)
+            .with_size(Size::new(size, size))
+            .build();
+        line.add(&preview, 0, SizerFlag::Right, px(GAP));
+        preview
+    });
+
+    // 名前と状態。幅は固定の下限にして、長いパスが入っても右のボタンを押し出さないようにする
+    let texts = BoxSizer::builder(Orientation::Vertical).build();
+    let title = StaticText::builder(panel)
+        .with_label(&tr(ft.name_key()))
+        .build();
+    if let Some(mut font) = title.get_font() {
+        font.make_bold();
+        title.set_font(&font);
+    }
+    texts.add(&title, 0, SizerFlag::Expand, 0);
+    let status_line = || {
+        let text = StaticText::builder(panel).build();
+        text.set_min_size(Size::new(px(120), -1));
+        texts.add(&text, 0, SizerFlag::Expand | SizerFlag::Top, px(2));
+        text
+    };
+    let default_text = status_line();
+    let registered_text = status_line();
+    line.add_sizer(&texts, 1, SizerFlag::Expand | SizerFlag::Right, px(GAP));
+
+    // 操作: アイコンの選択 (選べる OS だけ) の下に「関連付ける」「解除」
+    let controls = BoxSizer::builder(Orientation::Vertical).build();
+    let choice = caps.icons.then(|| {
+        let choice = choice_with(
+            panel,
+            vec![
+                tr("settings.assoc.icon_document"),
+                tr("settings.assoc.icon_app"),
+                tr("settings.assoc.icon_custom"),
+            ],
+        );
+        let icon_line = BoxSizer::builder(Orientation::Horizontal).build();
+        icon_line.add(
+            &label(panel, "settings.assoc.icon"),
+            0,
+            LABEL_FLAGS | SizerFlag::Right,
+            px(GAP),
+        );
+        icon_line.add(&choice, 1, LABEL_FLAGS, 0);
+        controls.add_sizer(&icon_line, 0, SizerFlag::Expand | SizerFlag::Bottom, px(4));
+        choice
+    });
+    let register = Button::builder(panel)
+        .with_label(&tr("settings.assoc.register"))
+        .build();
+    let unregister = Button::builder(panel)
+        .with_label(&tr("settings.assoc.unregister"))
+        .build();
+    let actions = BoxSizer::builder(Orientation::Horizontal).build();
+    actions.add(&register, 1, SizerFlag::Right, px(4));
+    actions.add(&unregister, 1, SizerFlag::AlignLeft, 0);
+    controls.add_sizer(&actions, 0, SizerFlag::Expand, 0);
+    line.add_sizer(&controls, 0, SizerFlag::AlignLeft, 0);
+    sizer.add_sizer(
+        &line,
+        0,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
+        px(GAP),
+    );
+
+    let row = AssocRow {
+        kind,
+        panel: *panel,
+        default_text,
+        registered_text,
+        unregister,
+        icon: preview.zip(choice),
+        chosen: Rc::new(RefCell::new(assoc::Icon::Document)),
+    };
+    if caps.unavailable.is_some() {
+        register.enable(false);
+    }
+
+    register.on_click({
+        let (row, dialog) = (row.clone(), dialog.clone());
+        move |_| {
+            let icon = row.chosen.borrow().clone();
+            let result = assoc::register(row.kind, &icon, &assoc_labels());
+            row.refresh();
+            assoc_report(&dialog, result);
+        }
+    });
+    unregister.on_click({
+        let (row, dialog) = (row.clone(), dialog.clone());
+        move |_| {
+            let result = assoc::unregister(row.kind);
+            row.refresh();
+            assoc_report(&dialog, result);
+        }
+    });
+    if let Some(choice) = choice {
+        choice.on_selection_changed({
+            let (row, dialog) = (row.clone(), dialog.clone());
+            move |_| {
+                let icon = match choice.get_selection() {
+                    Some(0) => Some(assoc::Icon::Document),
+                    Some(1) => Some(assoc::Icon::App),
+                    // 「ファイルを指定」: 選ばずに閉じたら元の選択に戻す
+                    _ => pick_icon_file(&dialog),
+                };
+                let Some(icon) = icon else {
+                    row.show_icon();
+                    return;
+                };
+                *row.chosen.borrow_mut() = icon.clone();
+                // 登録済みならすぐ OS に反映する (未登録なら、次に関連付けるときに使う)
+                let result = assoc::set_icon(row.kind, &icon);
+                row.refresh();
+                assoc_report(&dialog, result);
+            }
+        });
+    }
+    row
+}
+
+/// アイコンにするファイルを選ばせる
+fn pick_icon_file(dialog: &Dialog) -> Option<assoc::Icon> {
+    let picker = FileDialog::builder(dialog)
+        .with_message(&tr("settings.assoc.icon_custom_title"))
+        .with_wildcard(assoc::icon_wildcard())
+        .with_style(FileDialogStyle::Open | FileDialogStyle::FileMustExist)
+        .build();
+    if picker.show_modal() != ID_OK {
+        return None;
+    }
+    let path = picker.get_path()?;
+    Some(assoc::custom_icon(std::path::Path::new(&path)))
+}
+
 fn page_update(panel: &Panel, current: &Settings, readers: &mut Readers, dialog: &Dialog) {
     let px = |v: i32| panel.from_dip_int(v);
     let check = CheckBox::builder(panel)
@@ -1469,5 +1899,24 @@ fn line_numbers_key(value: LineNumbers) -> &'static str {
         LineNumbers::Left => "settings.editor.line_numbers_left",
         LineNumbers::Right => "settings.editor.line_numbers_right",
         LineNumbers::Both => "settings.editor.line_numbers_both",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shorten_middle_keeps_both_ends() {
+        assert_eq!(shorten_middle("short", 10), "short");
+        assert_eq!(shorten_middle("abcdefghij", 10), "abcdefghij");
+        assert_eq!(shorten_middle("abcdefghijk", 10), "abcd…ghijk");
+        let path = r"C:\Users\someone\AppData\Local\Programs\Typball\Typball.exe";
+        let short = shorten_middle(path, 30);
+        assert_eq!(short.chars().count(), 30);
+        assert!(short.starts_with(r"C:\Users\some"));
+        assert!(short.ends_with(r"all\Typball.exe"));
+        // 日本語のパスも文字単位で切る
+        assert_eq!(shorten_middle("あいうえおかきくけこ", 5), "あい…けこ");
     }
 }

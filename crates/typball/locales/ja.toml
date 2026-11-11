@@ -504,6 +504,37 @@ site_url = "表示する URL:"
 # 日本語は空白が無いと wx が折り返せないので、文の切れ目に改行を入れておく
 site_note = "{port} は空きポート、{root} はプロジェクトのフォルダ (hugo.toml などのある場所) に置き換わります。\n既定のコマンドの navigateToChanged により、保存した記事のページへ自動で移動します。"
 
+[settings.assoc]
+title = "関連付け"
+# 日本語は空白が無いと wx が折り返せないので、文の切れ目に改行を入れておく
+intro = "ファイルをダブルクリックしたときに Typball で開くよう、OS に登録します。\nここでの操作はすぐに反映されます (OK / キャンセルとは関係しません)。"
+target = "登録する Typball:"
+default_app = "既定のアプリ: {name}"
+default_self = "既定のアプリ: {name} (この Typball)"
+default_none = "既定のアプリ: なし"
+registered_no = "Typball: 未登録"
+registered_this = "Typball: 登録済み"
+registered_other = "Typball: 登録済み (別の場所: {path})"
+register = "関連付ける"
+unregister = "解除"
+register_all = "すべて関連付ける"
+unregister_all = "すべて解除"
+open_settings = "既定のアプリの設定を開く..."
+icon = "アイコン:"
+icon_document = "書類のアイコン"
+icon_app = "Typball のアイコン"
+icon_custom = "ファイルを指定..."
+icon_custom_title = "アイコンにするファイルを選ぶ"
+error = "関連付けを変更できませんでした。\n{error}"
+# OS に登録する右クリックメニューの項目名 (インストーラーの VerbOpen / VerbEdit / VerbView と同じ文言)
+verb_open = "Typball で開く"
+verb_edit = "Typball で編集"
+verb_view = "Typball でプレビュー"
+note_windows = "Windows の設定で別のアプリを既定に選んである拡張子は、登録しても既定のアプリは変わりません。\nその場合は「既定のアプリの設定を開く」から Typball を選んでください。\n「関連付ける」は今動いているこの Typball を登録します (別の場所の Typball からの付け替えにも使えます)。"
+note_linux = "~/.local/share/applications/typball.desktop と ~/.config/mimeapps.list に登録します。\nファイルのアイコンはデスクトップのアイコンテーマで決まるので、ここでは変えられません。"
+note_macos = "その種類のファイルを開く既定のアプリを Typball にします\n(Finder の「このアプリケーションで開く → すべてを変更」と同じ)。\n解除するとテキストエディットに戻ります。"
+unavailable_macos = "関連付けは、Typball.app として起動しているときだけ変更できます。"
+
 [settings.update]
 title = "更新"
 check_on_startup = "起動時に新しい版が公開されていないか確認する"

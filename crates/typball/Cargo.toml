@@ -48,8 +48,9 @@ chardetng = "0.1"
 
 [target.'cfg(windows)'.dependencies]
 # WebView2 の自前ローダー (レジストリ・LoadLibrary・CoTaskMemAlloc・バージョン情報、MinGW のみ) と、
-# 開発サーバーの子プロセスを親と道連れにするジョブオブジェクト、検索バーの入力欄への WM_CUT などの送信 (editmenu.rs)
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_System_Com", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_Security", "Win32_UI_WindowsAndMessaging", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_IO", "Win32_Graphics_Gdi"] }
+# 開発サーバーの子プロセスを親と道連れにするジョブオブジェクト、検索バーの入力欄への WM_CUT などの送信 (editmenu.rs)、
+# 関連付け (assoc/windows.rs: レジストリ・今の既定のアプリの問い合わせ・アイコンの取り出し)
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_System_Com", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_Security", "Win32_UI_WindowsAndMessaging", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_IO", "Win32_Graphics_Gdi", "Win32_UI_Shell"] }
 
 [target.'cfg(windows)'.build-dependencies]
 embed-manifest = "1.4"

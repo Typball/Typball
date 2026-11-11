@@ -31,7 +31,7 @@ Windows / macOS / Linux で動くネイティブアプリで、Windows の日本
 
 | OS | ファイル | 使い方 |
 |---|---|---|
-| Windows | `typball-<ver>-windows-x86_64-setup.exe` | インストーラー。管理者権限は不要です。`.typ` / `.md` の関連付けとスタートメニューへの登録ができます |
+| Windows | `typball-<ver>-windows-x86_64-setup.exe` | インストーラー。管理者権限は不要です。`.typ` / `.md` の関連付けとスタートメニューへの登録ができます (関連付けは後から 設定 → 関連付け でも変えられます) |
 | Windows | `typball-<ver>-windows-x86_64.zip` | 展開した `Typball.exe` をそのまま実行します (インストール不要) |
 | macOS | `typball-<ver>-macos-aarch64.tar.gz` (Apple Silicon) / `-macos-x86_64.tar.gz` (Intel) | 展開した `Typball.app` を「アプリケーション」へ。署名していないため、初回は右クリック →「開く」で起動してください |
 | Linux | `typball-<ver>-linux-x86_64.tar.gz` | 展開した `Typball` を実行します (GTK3 が必要です) |
@@ -79,6 +79,19 @@ Typball --new-instance ファイル      # 起動中の Typball に渡さず、�
 
 Typball が起動しているときにファイルをダブルクリックすると、起動中の Typball のタブに入ります。
 インストーラー版では、ファイルの右クリックメニューに「Typball で編集」「Typball でプレビュー」が加わります。
+
+### 関連付け
+
+「ツール → 設定 → 関連付け」で、`.txt` / `.md` / `.typ` をダブルクリックしたときに Typball で開くよう OS に登録できます
+(インストーラーを使わない zip 版でも、インストーラーと同じ登録ができます)。形式ごとに今の既定のアプリと Typball の登録状況が出て、
+「関連付ける」「解除」はその場で反映されます。登録されるのは、そのとき動いている Typball です
+(別の場所に置いた Typball が登録されているときは、その場所が表示され、「関連付ける」で付け替えられます)。
+
+| OS | |
+|---|---|
+| Windows | ファイルに付くアイコンを、書類のアイコン / Typball のアイコン / 好きなファイル (`.ico` など) から選べます。Windows の設定で別のアプリを既定に選んである拡張子は、登録しただけでは既定のアプリが変わりません。「既定のアプリの設定を開く」から Typball を選んでください |
+| macOS | その種類のファイルを開く既定のアプリを Typball にします (Finder の「このアプリケーションで開く → すべてを変更」と同じ)。`Typball.app` として起動しているときだけ使えます。解除するとテキストエディットに戻ります |
+| Linux | `~/.local/share/applications/typball.desktop` と `~/.config/mimeapps.list` に登録します。ファイルのアイコンはデスクトップのアイコンテーマで決まります |
 
 ### 設定
 

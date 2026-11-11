@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Typball.app の Info.plist のひな形。ci.yml / release.yml が __VERSION__ を版の番号に置き換えて
+  Typball.app/Contents/Info.plist に置く。
+
+  CFBundleDocumentTypes が「Typball で開ける書類の種類」の宣言で、これがあると Finder の
+  「このアプリケーションで開く」に Typball が出て、設定 → 関連付け (assoc/macos.rs) で既定のアプリにできる。
+  種類は UTI で指す:
+    .typ  io.github.typball.typst      Typst には決まった UTI が無いので、下の UTExportedTypeDeclarations で定義する
+    .md   net.daringfireball.markdown  macOS が知らない場合に備えて UTImportedTypeDeclarations にも書く
+    .txt  public.plain-text            macOS の標準
+  LSHandlerRank: Owner は「この種類の持ち主」(他に既定が無ければ Typball で開く)、Alternate は
+  「開けるが、既定には名乗り出ない」(利用者が選んだときだけ既定になる)。
+  書類のアイコンは Resources の doc-*.icns (design/icons/export_icons.py が作る)。
+-->
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>Typball</string>
+  <key>CFBundleDisplayName</key><string>Typball</string>
+  <key>CFBundleIdentifier</key><string>io.github.typball.typball</string>
+  <key>CFBundleVersion</key><string>__VERSION__</string>
+  <key>CFBundleShortVersionString</key><string>__VERSION__</string>
+  <key>CFBundleExecutable</key><string>Typball</string>
+  <key>CFBundleIconFile</key><string>Typball</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>CFBundleDocumentTypes</key><array>
+    <dict>
+      <key>CFBundleTypeName</key><string>Typst Document</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Owner</string>
+      <key>CFBundleTypeIconFile</key><string>doc-typ</string>
+      <key>LSItemContentTypes</key><array><string>io.github.typball.typst</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Markdown Document</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>CFBundleTypeIconFile</key><string>doc-md</string>
+      <key>LSItemContentTypes</key><array><string>net.daringfireball.markdown</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Text Document</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>CFBundleTypeIconFile</key><string>doc-txt</string>
+      <key>LSItemContentTypes</key><array><string>public.plain-text</string></array>
+    </dict>
+  </array>
+  <key>UTExportedTypeDeclarations</key><array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>io.github.typball.typst</string>
+      <key>UTTypeDescription</key><string>Typst Document</string>
+      <key>UTTypeIconFile</key><string>doc-typ</string>
+      <key>UTTypeConformsTo</key><array><string>public.plain-text</string></array>
+      <key>UTTypeTagSpecification</key><dict>
+        <key>public.filename-extension</key><array><string>typ</string></array>
+      </dict>
+    </dict>
+  </array>
+  <key>UTImportedTypeDeclarations</key><array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>net.daringfireball.markdown</string>
+      <key>UTTypeDescription</key><string>Markdown Document</string>
+      <key>UTTypeConformsTo</key><array><string>public.plain-text</string></array>
+      <key>UTTypeTagSpecification</key><dict>
+        <key>public.filename-extension</key><array><string>md</string><string>markdown</string></array>
+      </dict>
+    </dict>
+  </array>
+</dict></plist>

@@ -137,6 +137,12 @@ Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}\SupportedTypes"; Val
 ; 対話インストールの最後に起動する。自動更新 (サイレント) では Typball 側のバッチが起動し直す
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
+[UninstallRun]
+; アプリの 設定 → 関連付け で、この Typball に後から登録した関連付け (.txt など) を解除する。
+; 関連付ける前の既定のアプリに戻すところまでアプリ側がやる (crates/typball/src/assoc/windows.rs)。
+; ファイルとレジストリを消す前に実行される
+Filename: "{app}\{#AppExe}"; Parameters: "--unregister-associations"; RunOnceId: "TypballAssociations"; Flags: waituntilterminated
+
 [UninstallDelete]
 ; WebView2 のプロファイル (キャッシュ)。設定 (%APPDATA%\Typball\Settings.toml) は残す
 Type: filesandordirs; Name: "{localappdata}\{#AppName}\EBWebView"
