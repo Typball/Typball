@@ -210,7 +210,7 @@ macOS / Linux では新しい版を知らせ、ダウンロードページを開
 ### Windows (ワンクリック)
 
 リポジトリ直下の [`build.cmd`](build.cmd) をダブルクリックするか、ターミナルで実行すると `dist\Typball.exe` ができます。
-足りない開発ツールは winget で自動的にインストールします。初回は wxWidgets をソースからビルドするため 10 分以上かかります。
+足りない開発ツールは自動的にインストールします。初回は wxWidgets をソースからビルドするため 10 分以上かかります。
 
 ```bat
 build.cmd
@@ -219,14 +219,34 @@ build.cmd
 | 必要なもの | 導入方法 (無い場合は build.cmd が実行) | 備考 |
 |---|---|---|
 | Rust | `winget install Rustlang.Rustup` | その後 `stable-x86_64-pc-windows-gnu` ツールチェーンを追加 |
-| C/C++ コンパイラ・CMake・make・libclang | `winget install CodeBlocks.CodeBlocks.MinGW --scope machine` | Code::Blocks 25.03 同梱の MinGW-w64 (GCC 14, UCRT) |
+| C/C++ コンパイラ・CMake・make・libclang | Code::Blocks 25.03 公式インストーラー (`codeblocks-25.03mingw-setup.exe`) | 同梱の MinGW-w64 (GCC 14, UCRT) を `C:\Program Files\CodeBlocks\MinGW\bin` で使う |
 | CMake (予備) | `winget install Kitware.CMake` | 見つかった MinGW に cmake.exe が無い場合のみ |
 | libclang (予備) | `winget install LLVM.LLVM` | 見つかった MinGW に libclang.dll が無い場合のみ |
+
+winget にある Code::Blocks (`CodeBlocks.CodeBlocks.MinGW`) は zip を展開するポータブル版で、入る場所が
+`%LOCALAPPDATA%\Microsoft\WinGet\Packages\...` と分かりにくいため使いません。
+Windows ヘッダーが古い MinGW (例: Code::Blocks 20.03 同梱の GCC 8.1。wxWidgets の Direct2D 描画に必要な定義が無い) は
+小さなテストのコンパイルで判定して使いません。使える MinGW が無ければ次の順で用意します。
+
+1. 古い Code::Blocks (`C:\Program Files\CodeBlocks`) があれば、上書きすると古い MinGW のファイルが混ざるので先にアンインストールします。
+   実行前に確認が出て、30 秒で自動的に進みます (N で残す)。
+2. SourceForge から `codeblocks-25.03mingw-setup.exe` (約 423 MB) を取得し、公式の `checkums.txt` に載っている SHA-256 と照合してから、
+   `/S` で黙ってインストールします。管理者権限の確認 (UAC) が出ます。取得したファイルは `%TEMP%` に置き、
+   途中で止めても照合に通るものだけを次回に使い回します。
+3. UAC を拒否した・管理者権限が無い・1. で残した場合は、Code::Blocks 25.03 / CI と同じ WinLibs の zip を GitHub から取得し
+   (SHA-256 を照合)、`%LOCALAPPDATA%\Typball\winlibs` に展開して使います。
+
+CMake は使った MinGW のフルパスを `target\<profile>\wxdragon_sys_cmake_build` のキャッシュに記録します。
+前回と違う MinGW でビルドすると (例: WinLibs → Code::Blocks)、build.cmd はこれを見つけて
+`wxdragon_sys_cmake_build` と `wxwidgets_cmake_build` を消してから cargo を呼びます。wxWidgets は再びコンパイルされます。
+
+build.cmd のメッセージは英語です。cmd.exe は非 ASCII 文字を含むバッチで行の位置を誤り、続く行の断片を実行することがあるため、
+ファイル全体を ASCII に保っています。
 
 | 環境変数 | 値 | 意味 |
 |---|---|---|
 | `TYPBALL_TOOLCHAIN` | `gnu` (既定) / `msvc` | `msvc` にすると Visual Studio 2022 Build Tools (C++) を使い、無ければ winget で導入します |
-| `TYPBALL_MINGW_DIR` | パス | `gcc.exe` / `g++.exe` のあるフォルダを指定する |
+| `TYPBALL_MINGW_DIR` | パス | `gcc.exe` / `g++.exe` のあるフォルダを指定する (ヘッダーが古くても警告だけ出してこれを使う) |
 | `TYPBALL_PROFILE` | `debug` | debug ビルドにする (既定は release) |
 | `TYPBALL_DRY_RUN` | `1` | インストールとビルドを実行せず、実行するコマンドを表示するだけにする |
 
