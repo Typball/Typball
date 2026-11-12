@@ -70,6 +70,7 @@ mod site;
 mod tab;
 mod tabbar;
 mod tabs;
+mod textctrl;
 mod theme;
 mod toolbar;
 mod update;

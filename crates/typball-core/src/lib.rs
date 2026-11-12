@@ -383,6 +383,9 @@ pub fn system_font_families() -> &'static [FontFamily] {
 /// コンパイルだけ行う (ラスタライズはしない)。失敗したら文書は None。
 /// `path` は文書の保存先 (未保存なら None)。そのフォルダを基準に画像などを読む
 fn compile_document(source: &str, path: Option<&Path>) -> (Option<Document>, Vec<String>) {
+    // Typst は組版の途中結果や、表示用に拡大縮小した画像を覚えておく (comemo)。捨てないと増え続けるので、
+    // コンパイルのたびに、ここ 10 回使われなかったものを捨てる (Typst の CLI の監視モードと同じ回数)
+    comemo::evict(10);
     let world = engine().session(source, path);
     let warned = typst::compile::<PagedDocument>(&world);
     let mut diagnostics: Vec<String> = warned

@@ -123,7 +123,7 @@ untitled = "無題"
 [template]
 # 新しいファイル (Ctrl+N、起動時の新規タブ) の雛形。設定 [filetypes.*] template で上書きできる
 md = ""
-typ = "#set page(paper: \"a4\")\n#set text(font: \"Noto Sans JP\", lang: \"ja\", size: 11pt)\n\n= 新しい文書\n\n"
+typ = "#set page(paper: \"a4\")\n#set text(font: \"Noto Sans JP\", lang: \"ja\", size: 12pt)\n\n= 新しい文書\n\n"
 
 [pane]
 outline = "アウトライン"
@@ -494,7 +494,8 @@ cancelled = "更新を中止しました"
 title = "プレビュー"
 font_face = "フォント:"
 font_size = "フォントサイズ (pt):"
-font_note = "Typst は文書が #set text(font:) で指定しないときの既定、Markdown のプレビューの本文、プレビューウィンドウのテキスト表示に使います。同梱の Noto Sans JP はインストールしなくても使えます。エディタのフォントは「エディタ」ページで別に決めます。"
+tab_width = "タブ幅 (半角の文字数):"
+font_note = "Typst は文書が #set text(font:) で指定しないときの既定、Markdown のプレビューの本文、プレビューウィンドウのテキスト表示に使います。同梱の Noto Sans JP はインストールしなくても使えます。エディタのフォントは「エディタ」ページで別に決めます。\nタブ幅は、プレビューウィンドウのテキスト表示と Markdown のコードに使います (エディタのタブ幅とは別です)。"
 markdown_mode = "Markdown のプレビュー:"
 markdown_mode_auto = "自動 (サイトのプロジェクト内ならサイトモード)"
 markdown_mode_markdown = "Markdown を HTML にして表示"

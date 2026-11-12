@@ -10,6 +10,10 @@
 //!   コンパイルし直さずに並べ直す ([`TypstView::relayout`])
 //! - ページは描くときに、見えているものだけラスタライズしてキャッシュする (大きな倍率でも全ページ分の
 //!   画像を持たない)。並べ直し・再コンパイルでキャッシュは捨てる
+//! - 大きさや倍率が変わっている間はラスタライズし直さない。手持ちの画像を伸び縮みさせて描き、変化が
+//!   止まってから ([`SETTLE_MS`]) 見えているページだけ作り直す。「幅に合わせる」ではペインの幅が 1 px 変わる
+//!   たびに倍率が変わるので、そのつど作り直すと境界のドラッグが引っかかる (SVG や大きな画像を含む文書で
+//!   1 回 100 ms 以上。拡大率の高い画面ではさらに重い)
 //! - コンパイルに失敗したときは直前に成功した文書を出したままにする (診断はステータスバーとコンソール)
 //! - 倍率は「幅に合わせる」「ページ全体」「固定の %」。最後に選んだものを設定 `[preview] typst_zoom` に
 //!   覚えて、次に開くタブとプレビューウィンドウで使う
@@ -17,6 +21,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
+use wxdragon::dc::{LogicalFunction, MemoryDC, StretchBlitConfig};
 use wxdragon::prelude::*;
 use wxdragon::widgets::scrolled_window::ScrollBarConfig;
 
@@ -32,6 +37,8 @@ pub const SCROLL_UNIT: i32 = 16;
 /// 1 pt あたりのピクセル数の範囲 (小さすぎる / 大きすぎる画像を作らない)
 const MIN_PPP: f32 = 0.05;
 const MAX_PPP: f32 = 8.0;
+/// 大きさ・倍率の変化が止まったとみなすまでの時間 (ms)。この間は手持ちの画像を伸び縮みさせて描く
+const SETTLE_MS: i32 = 150;
 /// ページの周り (とページ間のすき間) の色
 const BG_LIGHT: u8 = 230;
 
@@ -96,6 +103,8 @@ struct PageSlot {
     height: i32,
     top: i32,
     bitmap: Option<Bitmap>,
+    /// `bitmap` は前の大きさで作ったもの (伸び縮みさせて描き、変化が止まったら作り直す)
+    stale: bool,
 }
 
 struct State {
@@ -122,6 +131,10 @@ pub struct TypstView {
     state: RefCell<State>,
     /// 見えているページ (0 始まり)。描くたびに求め直し、変わったらバーの表示を直す
     current: Cell<usize>,
+    /// 大きさ・倍率の変化が止まるのを待つ単発タイマー
+    settle: Timer<ScrolledWindow>,
+    /// 変化が続いている (タイマーが切れるまでラスタライズしない)
+    settling: Cell<bool>,
 }
 
 impl TypstView {
@@ -152,6 +165,8 @@ impl TypstView {
                 dark: false,
             }),
             current: Cell::new(0),
+            settle: Timer::new(&scrolled),
+            settling: Cell::new(false),
         });
         view.bind();
         view.update_bar();
@@ -170,6 +185,16 @@ impl TypstView {
             }
         });
         scrolled.on_erase_background(|_| {});
+        // 大きさ・倍率の変化が止まった: 伸び縮みさせていたページを今の倍率で作り直す
+        self.settle.on_tick({
+            let weak = weak.clone();
+            move |_| {
+                if let Some(v) = weak.upgrade() {
+                    v.settling.set(false);
+                    v.scrolled.refresh(false, None);
+                }
+            }
+        });
         // 合わせるモードは大きさが変わると倍率が変わるので並べ直す (コンパイルはしない)
         scrolled.on_size({
             let weak = weak.clone();
@@ -234,7 +259,7 @@ impl TypstView {
         if let Some(doc) = doc {
             self.state.borrow_mut().doc = Some(doc);
             // 同じ倍率なら位置はピクセルのまま保つ (入力のたびに跳ばない)
-            self.relayout(false);
+            self.relayout(false, false);
         }
         let msg = if diagnostics.is_empty() {
             tr("status.ok")
@@ -254,7 +279,7 @@ impl TypstView {
     pub fn apply_theme(&self) {
         self.scrolled.set_background_color(bg());
         self.bar.apply_theme();
-        self.relayout(false);
+        self.relayout(false, false);
     }
 
     /// 今の実際の倍率 (%)
@@ -273,7 +298,7 @@ impl TypstView {
             return;
         }
         self.state.borrow_mut().zoom = zoom;
-        self.relayout(true);
+        self.relayout(true, true);
         // ページ全体はページの切れ目で止まると意味が無いので、見ていたページの頭に合わせる
         if zoom == Zoom::FitPage {
             self.go_to_page(self.current.get());
@@ -300,15 +325,16 @@ impl TypstView {
             Zoom::Percent(_) => false,
         };
         if changed {
-            self.relayout(false);
+            self.relayout(false, true);
         } else {
             self.scrolled.refresh(false, None);
         }
     }
 
     /// 倍率を決めてページを並べ直し、スクロール範囲を設定し直す。`keep_relative` なら倍率が変わっても
-    /// 画面の中央にあった位置 (ページ番号とページ内の割合) を保つ
-    fn relayout(&self, keep_relative: bool) {
+    /// 画面の中央にあった位置 (ページ番号とページ内の割合) を保つ。`reuse` は文書が同じで大きさ・倍率だけ
+    /// 変わったとき: ページの画像を捨てずに伸び縮みさせて描き、変化が止まってから作り直す
+    fn relayout(&self, keep_relative: bool, reuse: bool) {
         let client = self.scrolled.get_client_size();
         let dip = Dip::of(&self.scrolled);
         let margin = dip.px(MARGIN);
@@ -341,6 +367,7 @@ impl TypstView {
 
         let mut top = margin;
         let mut max_w = 0;
+        let mut old = std::mem::take(&mut st.pages).into_iter();
         let pages: Vec<PageSlot> = sizes
             .iter()
             .map(|(w, h)| {
@@ -352,11 +379,20 @@ impl TypstView {
                 }
                 .max(1);
                 let height = ((h * ppp as f64).round() as i32).max(1);
+                // 文書が同じなら前の画像を引き継ぐ (大きさが違えば伸び縮みさせて描く)
+                let (bitmap, stale) = match old.next() {
+                    Some(prev) if reuse && prev.bitmap.is_some() => {
+                        let same = prev.width == width && prev.height == height;
+                        (prev.bitmap, prev.stale || !same)
+                    }
+                    _ => (None, false),
+                };
                 let slot = PageSlot {
                     width,
                     height,
                     top,
-                    bitmap: None,
+                    bitmap,
+                    stale,
                 };
                 top += height + gap;
                 max_w = max_w.max(width);
@@ -374,6 +410,15 @@ impl TypstView {
         st.laid_out_for = client;
         st.dark = crate::theme::preview_dark();
         drop(st);
+        if reuse {
+            // 変化が続く間は作り直さない。呼ばれるたびに待ち時間を数え直す
+            self.settling.set(true);
+            self.settle.start(SETTLE_MS, true);
+        } else {
+            // 文書が変わった: すぐに作り直す
+            self.settling.set(false);
+            self.settle.stop();
+        }
 
         // スクロール範囲。合わせるモードの幅は切り捨てて、クライアント幅を超えないようにする
         let units = |px: i32, round_up: bool| {
@@ -459,6 +504,7 @@ impl TypstView {
         let client = self.scrolled.get_client_size();
         let (vx, vy) = self.view_start_px();
         let dark = crate::theme::preview_dark();
+        let settling = self.settling.get();
         let current = {
             let mut st = self.state.borrow_mut();
             if st.dark != dark {
@@ -486,7 +532,8 @@ impl TypstView {
                     }
                     continue;
                 }
-                if p.bitmap.is_none() {
+                // 大きさ・倍率が変わっている間は作り直さない (止まってから 1 回だけ)
+                if (p.bitmap.is_none() || p.stale) && !settling {
                     p.bitmap = doc
                         .as_ref()
                         .and_then(|d| d.rasterize_page(i, ppp))
@@ -496,10 +543,48 @@ impl TypstView {
                             }
                             Bitmap::from_rgba(&img.rgba, img.width, img.height)
                         });
+                    p.stale = false;
                 }
-                if let Some(bmp) = &p.bitmap {
-                    let x = (total_w - p.width) / 2;
-                    dc.draw_bitmap(bmp, x - vx, p.top - vy, false);
+                let x = (total_w - p.width) / 2 - vx;
+                let y = p.top - vy;
+                match &p.bitmap {
+                    Some(bmp) if !p.stale => dc.draw_bitmap(bmp, x, y, false),
+                    // 前の大きさの画像を今の大きさに伸び縮みさせる
+                    Some(bmp) => {
+                        // ページ全体を渡してよい: 見えていない部分は描画先で切り取られる
+                        // (見えている行だけに絞っても速くならなかった)
+                        let mut source = MemoryDC::new();
+                        source.select_object_as_source(bmp);
+                        dc.stretch_blit(
+                            &source,
+                            StretchBlitConfig {
+                                dest_x: x,
+                                dest_y: y,
+                                dest_width: p.width,
+                                dest_height: p.height,
+                                src_x: 0,
+                                src_y: 0,
+                                src_width: bmp.get_width(),
+                                src_height: bmp.get_height(),
+                                logical_func: LogicalFunction::Copy,
+                                use_mask: false,
+                                src_mask_x: 0,
+                                src_mask_y: 0,
+                            },
+                        );
+                    }
+                    // まだ画像が無いページ (変化の途中で見えてきた) は紙の色で塗っておく
+                    None => {
+                        let paper = if dark {
+                            darken_level(255, 255, 255)
+                        } else {
+                            255
+                        };
+                        let paper = Colour::new(paper, paper, paper, 255);
+                        dc.set_pen(paper, 1, PenStyle::Solid);
+                        dc.set_brush(paper, BrushStyle::Solid);
+                        dc.draw_rectangle(x, y, p.width, p.height);
+                    }
                 }
             }
             current

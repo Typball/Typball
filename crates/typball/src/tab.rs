@@ -909,12 +909,15 @@ impl Tab {
                 PaneContent::Outline(list)
             }
             Pane::Console => {
+                // 普通の EDIT にする (Rich2 = RichEdit にしない)。RichEdit は字の大きさを自分で DPI に
+                // 合わせるうえ、wx がモニターとシステムの拡大率の比でズームを掛けるので、拡大率の違う
+                // モニターが混ざった環境で字が二重に拡大された (175% のモニターで 1.75 倍)。EDIT なら
+                // ほかの部品と同じく wx がフォントをウィンドウの DPI に合わせるだけで済む
                 let text = TextCtrl::builder(&bbox.body)
                     .with_style(
                         TextCtrlStyle::MultiLine
                             | TextCtrlStyle::ReadOnly
-                            | TextCtrlStyle::DontWrap
-                            | TextCtrlStyle::Rich2,
+                            | TextCtrlStyle::DontWrap,
                     )
                     .build();
                 // コンソールは UI フォント (設定のフォントはエディタの中身だけ)
@@ -2314,9 +2317,10 @@ impl Tab {
             .show(settings.editor.line_numbers.right());
         self.apply_actionbar_setting(settings);
         self.apply_pane_defaults(before, settings);
-        // プレビューのフォントが変わった: Typst は組み直し、Markdown はページを読み直す
+        // プレビューのフォントかタブ幅が変わった: Typst は組み直し、Markdown はページを読み直す
         if before.preview.font_face != settings.preview.font_face
             || before.preview.font_size != settings.preview.font_size
+            || before.preview.tab_width != settings.preview.tab_width
         {
             if let Some(web) = self.active_web_preview() {
                 web.reload_page();

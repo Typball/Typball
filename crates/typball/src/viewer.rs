@@ -146,17 +146,24 @@ impl Viewer {
                 Content::Web(web)
             }
             FileType::Txt => {
+                // 普通の EDIT (Rich2 にしない理由は tab.rs のコンソールと同じ: 拡大率の違うモニターが
+                // 混ざった環境で RichEdit の字が二重に拡大される)
                 let ctrl = TextCtrl::builder(&body)
                     .with_style(
                         TextCtrlStyle::MultiLine
                             | TextCtrlStyle::ReadOnly
-                            | TextCtrlStyle::DontWrap
-                            | TextCtrlStyle::Rich2,
+                            | TextCtrlStyle::DontWrap,
                     )
                     .build();
                 if let Some(font) = preview_font(&settings) {
                     ctrl.set_font(&font);
                 }
+                // タブ幅はプレビューの設定に合わせる (EDIT の既定は 8 文字)
+                crate::textctrl::keep_tab_width(
+                    &ctrl,
+                    &settings,
+                    crate::textctrl::preview_tab_width,
+                );
                 fill(&body, &ctrl);
                 Content::Text(ctrl)
             }
@@ -315,23 +322,30 @@ fn preview_font(settings: &settings::Settings) -> Option<Font> {
         .build()
 }
 
-/// 設定が変わった: プレビューのフォントが変わっていれば開いているプレビューウィンドウを描き直す
+/// 設定が変わった: プレビューのフォントが変わっていれば開いているプレビューウィンドウを描き直す。
+/// テキストの表示と Markdown のコードはタブ幅 (`[preview] tab_width`) にも合わせる
 pub fn apply_settings(before: &settings::Settings, after: &settings::Settings) {
-    if before.preview.font_face == after.preview.font_face
-        && before.preview.font_size == after.preview.font_size
-    {
+    let font_changed = before.preview.font_face != after.preview.font_face
+        || before.preview.font_size != after.preview.font_size;
+    let tab_changed = before.preview.tab_width != after.preview.tab_width;
+    if !font_changed && !tab_changed {
         return;
     }
     let viewers: Vec<Rc<Viewer>> = VIEWERS.with(|v| v.borrow().clone());
     for viewer in viewers {
         match &viewer.content {
-            Content::Typst(_) => viewer.render(),
+            Content::Typst(_) if font_changed => viewer.render(),
             Content::Web(web) => web.reload_page(),
             Content::Text(ctrl) => {
-                if let Some(font) = preview_font(after) {
-                    ctrl.set_font(&font);
+                if font_changed {
+                    if let Some(font) = preview_font(after) {
+                        ctrl.set_font(&font);
+                    }
                 }
+                // タブ位置はフォントごとに決まるので、フォントを替えた後にも設定し直す
+                crate::textctrl::apply_tab_width(ctrl, after, crate::textctrl::preview_tab_width);
             }
+            _ => {}
         }
     }
 }

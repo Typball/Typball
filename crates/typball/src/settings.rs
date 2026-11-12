@@ -142,6 +142,9 @@ pub struct Preview {
     pub font_face: String,
     /// 同じくサイズ (pt)
     pub font_size: i32,
+    /// プレビューのタブ幅 (半角の文字数): プレビューウィンドウのテキスト表示と、Markdown のコードの中のタブ。
+    /// エディタのタブ幅 (`[editor] tab_width`) とは別に決める
+    pub tab_width: i32,
     pub markdown_mode: MarkdownMode,
     /// 開発サーバーの起動コマンド。`{port}` と `{root}` (プロジェクトのフォルダ) が置き換わる
     pub site_command: String,
@@ -160,6 +163,7 @@ impl Default for Preview {
         Self {
             font_face: typball_core::EMBEDDED_FONT_FAMILY.to_string(),
             font_size: 12,
+            tab_width: 4,
             markdown_mode: MarkdownMode::Auto,
             // -D: 下書きも出す、-N: 保存したページへ移動、-M: 出力をディスクに書かない
             site_command: "hugo server -D -N -M --port {port} -s {root}".to_string(),

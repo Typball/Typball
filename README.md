@@ -153,7 +153,7 @@ sync_scroll_to_editor = true    # プレビューをスクロールしたらエ�
 open_mode = "editor"        # ファイルを渡されて起動したとき (ダブルクリック): "editor" / "viewer" (プレビューウィンドウ)。--edit / --view が優先
 template = """           # 新しいファイル (Ctrl+N / 起動時の新規タブ) の雛形。無ければ言語ごとの既定 (下の内容)
 #set page(paper: "a4")
-#set text(font: "Noto Sans JP", lang: "ja", size: 11pt)
+#set text(font: "Noto Sans JP", lang: "ja", size: 12pt)
 
 = 新しい文書
 
@@ -178,6 +178,7 @@ bottom_width = "editor"     # 下の置き場の幅: "editor" (エディタの�
 [preview]                   # プレビュー
 font_face = "Noto Sans JP"  # プレビューの既定フォント: Typst は文書が #set text(font:) で指定しないときの既定、Markdown の本文、プレビューウィンドウ。同梱の Noto Sans JP は未インストールでも使える
 font_size = 12              # 同じくサイズ (pt)
+tab_width = 4               # プレビューのタブ幅 (半角の文字数): プレビューウィンドウのテキスト表示と Markdown のコード。エディタの tab_width とは別
 markdown_mode = "auto"      # "auto" (サイトのプロジェクト内ならサイトモード) / "markdown" / "site"
 site_command = "hugo server -D -N -M --port {port} -s {root}"   # 開発サーバーのコマンド ({port} は空きポート、{root} はプロジェクトのフォルダ)
 site_url = "http://localhost:{port}/"                            # 表示する URL

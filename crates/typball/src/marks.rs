@@ -18,18 +18,20 @@
 //! - 別に画面へ描く (`ClientDC`) と、エディタが画面に出した後に記号を重ねることになり、その間の
 //!   一瞬だけ記号の無い絵が見える (クリックや入力のたびにちらつく)。エディタのウィンドウを二重バッファに
 //!   してあるので (`wxd_Window_BindAfterPaint`)、エディタの絵と記号は 1 回でまとめて画面に出る。
-//! - 記号の位置は Scintilla に聞く (`SCI_POINTXFROMPOSITION` など)。1 回の描画で何百回も聞くので、
-//!   画面の行の配置を覚えさせておく (`SCI_SETLAYOUTCACHE`)。
+//! - 記号の位置は、できるだけ Scintilla に聞かずに計算する ([`paint`] の「位置の求め方」)。位置を聞く
+//!   問い合わせは 1 回が遅く、空白 1 つごとに聞くと空白の多い文書で描画が 0.5 秒かかった。
+//!   画面の行の配置は覚えさせておく (`SCI_SETLAYOUTCACHE`)。
 
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ffi::c_void;
 
+use wxdragon::dc::Point as DcPoint;
 use wxdragon::prelude::*;
 
 use crate::fileio::LineEnding;
 use crate::scintilla;
 use crate::settings::Settings;
-
-const WIDE_SPACE: &str = "\u{3000}";
 
 const SCI_GETCHARAT: i32 = 2007;
 const SCI_SETVIEWWS: i32 = 2021;
@@ -141,6 +143,90 @@ struct Metrics {
     head: i32,
 }
 
+/// 文字の幅 (px) の控え。エディタの既定のスタイルで 1 文字ずつ測ったもの (下の「位置の求め方」)。
+/// フォント・ズーム・画面の拡大率が変わったら捨てる
+#[derive(Default)]
+struct Widths {
+    /// (フォント名, サイズ, ズーム, 拡大率)
+    key: (String, i32, i32, i32),
+    px: HashMap<char, i32>,
+}
+
+thread_local! {
+    static WIDTHS: RefCell<Widths> = RefCell::new(Widths::default());
+}
+
+impl Widths {
+    fn of(&mut self, stc: &StyledTextCtrl, c: char) -> i32 {
+        *self.px.entry(c).or_insert_with(|| {
+            scintilla::text_width(
+                stc,
+                crate::editor::STYLE_DEFAULT,
+                c.encode_utf8(&mut [0; 4]),
+            )
+        })
+    }
+}
+
+/// 描く記号 1 つ (空白・タブ・全角空白)
+struct Mark {
+    kind: u8,
+    x: i32,
+    width: i32,
+}
+
+/// 画面の 1 段 (折り返していない行は 1 行ぶん、折り返した行はその中の 1 段) の記号の位置を、
+/// 問い合わせずに計算で求める。合っているかは呼び出し側が確かめる
+///
+/// `text` は段の中身、`cum` は行の先頭からこの段の先頭までの幅 (タブ位置は行の先頭から数える)。
+/// 戻り値は (記号の一覧, 最後の記号の直後までの幅, 段の終わりまでの幅)。段の終わりまでの幅は、
+/// 最後の記号より後ろが ASCII だけのときにだけ求める (それ以外は None。漢字を 1 字ずつ測らないため)
+fn layout_segment(
+    stc: &StyledTextCtrl,
+    widths: &mut Widths,
+    text: &str,
+    cum: &mut i32,
+    tab_px: i32,
+) -> (Vec<Mark>, i32, Option<i32>) {
+    let base = *cum;
+    let last_mark = text.rfind([' ', '\t', '\u{3000}']);
+    let mut marks = Vec::new();
+    let mut after_last = 0;
+    for (i, c) in text.char_indices() {
+        if last_mark.is_none_or(|last| i > last) {
+            break;
+        }
+        let width = match c {
+            // Scintilla のタブ位置: 行の先頭から数えて、タブ幅の倍数のうち今の位置より 2 px 以上先のもの
+            '\t' => ((*cum + 2) / tab_px + 1) * tab_px - *cum,
+            _ => widths.of(stc, c),
+        };
+        if matches!(c, ' ' | '\t' | '\u{3000}') {
+            marks.push(Mark {
+                kind: if c == '\u{3000}' { b'w' } else { c as u8 },
+                x: *cum - base,
+                width,
+            });
+        }
+        *cum += width;
+        after_last = *cum - base;
+    }
+    // 最後の記号より後ろ
+    let tail = last_mark.map_or(text, |last| {
+        let len = text[last..].chars().next().map_or(1, char::len_utf8);
+        &text[last + len..]
+    });
+    let to_end = if tail.is_ascii() && !tail.contains('\t') {
+        for c in tail.chars() {
+            *cum += widths.of(stc, c);
+        }
+        Some(*cum - base)
+    } else {
+        None
+    };
+    (marks, after_last, to_end)
+}
+
 /// 描き直された範囲 (`update`) にかかる行の記号を `dc` に描く。エディタが自分を描き終えるたびに呼ぶ
 /// ([`on_painted`])。
 ///
@@ -148,6 +234,20 @@ struct Metrics {
 /// 未確定の文字は IME の窓がエディタの上に重ねて出しているだけで、文書にはまだ入っていない。
 /// 確定すると先にその窓が消え、少し遅れて文字が入るので、記号を描いたままだと、窓の下に隠れていた
 /// 記号が元の位置に一瞬見えてから行末へ動く
+///
+/// # 位置の求め方
+///
+/// 文字の画面上の位置を Scintilla に聞く問い合わせ (`SCI_POINTXFROMPOSITION` など) は、1 回ごとに
+/// 計測用の描画面を作るので遅い (1 回 0.2 ms 近く。行の配置を覚えさせていても変わらない)。以前は空白
+/// 1 つにつき 4 回聞いていて、空白の多い文書では 1 回の描画に 0.5 秒かかった。今は聞く回数を
+/// 1 行あたり 1〜2 回に抑える:
+///
+/// - 行の上端は聞かずに計算する (画面の何段目かは速く分かる)。描き直された範囲の外の行は何も聞かない
+/// - 空白・タブの x は、行の先頭から文字の幅を足して求める ([`layout_segment`])。文字の幅は既定の
+///   スタイルで 1 文字ずつ測って控えておく (同じ文字は 1 回だけ)
+/// - 足した結果が合っているかを、段ごとに 1 か所だけ Scintilla に聞いて確かめる。合わなければ
+///   (太字などで幅の違うスタイルが混ざっている、文字が合成されている、など) その段は空白の並びごとに
+///   位置を聞く
 pub fn paint(
     stc: &StyledTextCtrl,
     settings: &Settings,
@@ -168,13 +268,25 @@ pub fn paint(
     let from = scintilla::doc_line_from_visible(stc, first).clamp(0, count - 1);
     let to = scintilla::doc_line_from_visible(stc, first + screen + 1).clamp(from, count - 1);
 
-    let cell = scintilla::text_width(stc, crate::editor::STYLE_DEFAULT, " ").max(3);
+    let mut widths = WIDTHS.take();
+    let key = (
+        e.font_face.clone(),
+        e.font_size,
+        stc.get_zoom(),
+        stc.from_dip_int(9600),
+    );
+    if widths.key != key {
+        widths.key = key;
+        widths.px.clear();
+    }
+    let cell = widths.of(stc, ' ').max(3);
     let thin = stc.from_dip_int(1).max(1);
     let m = Metrics {
         cell,
         thin,
         head: (cell * 3 / 8).max(2),
     };
+    let tab_px = (widths.of(stc, ' ').max(1)) * e.tab_width.clamp(1, 16);
     let colours = crate::editor::colors();
     let rgb = crate::editor::rgb;
     let base = settings.files.line_ending();
@@ -186,81 +298,179 @@ pub fn paint(
     let size = stc.get_client_size();
     dc.set_clipping_region(margins, 0, (size.width - margins).max(0), size.height);
     dc.set_brush(rgb(colours.mark), BrushStyle::Transparent);
-    let pen = |colour: u32, width: i32| dc.set_pen(rgb(colour), width, PenStyle::Solid);
+    // ペンは変わるときだけ作り直す
+    let current_pen = Cell::new((u32::MAX, 0));
+    let pen = |colour: u32, width: i32| {
+        if current_pen.replace((colour, width)) != (colour, width) {
+            dc.set_pen(rgb(colour), width, PenStyle::Solid);
+        }
+    };
 
     let (update_top, update_bottom) = (update.y, update.y + update.height);
     // 行間 (設定) で足した高さは記号の大きさに入れない: 文字のある高さの中に描く
     let (extra_top, extra_bottom) = crate::editor::line_extra(stc, settings);
     let composing_line = composing.then(|| stc.get_current_line());
+    let row_height = scintilla::text_height(stc, from).max(1);
+    // 記号の高さ (行の中の文字のある部分)
+    let height = (row_height - extra_top - extra_bottom).max(4);
+    // 行の先頭の x (どの行も同じ)。最初に要るときに 1 回だけ聞く
+    let origin: Cell<Option<i32>> = Cell::new(None);
+    let origin_x = |line_start: i32| {
+        origin.get().unwrap_or_else(|| {
+            let x = scintilla::point_x_from_position(stc, line_start);
+            origin.set(Some(x));
+            x
+        })
+    };
+    // スタイルごとの空白の幅 (計算が合わなかった段で使う)
+    let mut style_widths: HashMap<(i32, char), i32> = HashMap::new();
+
+    let mut row = scintilla::visible_from_doc_line(stc, from);
     for line in from..=to {
+        // 行の上端と段の数は、画面の何段目かから計算する (聞くと遅い)
+        let next_row = scintilla::visible_from_doc_line(stc, line + 1);
+        let rows = next_row - row;
+        let line_top = (row - first) * row_height;
+        row = next_row;
+        // 折りたたまれて見えない行 / 描き直されなかった行 (前に描いた記号がそのまま残っている)
+        if rows <= 0 || line_top + rows * row_height <= update_top || line_top >= update_bottom {
+            continue;
+        }
         let start = stc.position_from_line(line);
         let end = scintilla::line_end_position(stc, line);
-        let height = scintilla::text_height(stc, line);
-        // 描き直されなかった行は、前に描いた記号がそのまま残っている (折り返した行は段の数だけ高い)
-        let line_top = scintilla::point_y_from_position(stc, start);
-        let line_bottom = scintilla::point_y_from_position(stc, end) + height;
-        if line_bottom <= update_top || line_top >= update_bottom {
+        let eol = line_ending_of(stc, line, count);
+        let draw_end = composing_line != Some(line)
+            && match eol {
+                Some(_) => e.show_eol,
+                None => e.show_eof,
+            };
+        let bytes = if e.show_whitespace && end > start {
+            let mut bytes = scintilla::line_bytes(stc, line);
+            bytes.truncate((end - start) as usize);
+            bytes
+        } else {
+            Vec::new()
+        };
+        let text = std::str::from_utf8(&bytes).unwrap_or("");
+        let has_marks = text.contains([' ', '\t', '\u{3000}']);
+        if !has_marks && !draw_end {
             continue;
         }
-        // ここから下の y と height は、行の中の文字のある部分
-        let height = (height - extra_top - extra_bottom).max(4);
-        let point = |pos: i32| {
-            (
-                scintilla::point_x_from_position(stc, pos),
-                scintilla::point_y_from_position(stc, pos) + extra_top,
-            )
-        };
-        // 記号の幅: 次の文字の位置まで。折り返しで次の文字が次の段にあるときは `fallback`
-        let width_at = |pos: i32, len: i32, x: i32, y: i32, fallback: i32| {
-            let (next_x, next_y) = point(pos + len);
-            if next_y == y && next_x > x {
-                next_x - x
-            } else {
-                fallback
-            }
-        };
 
-        if e.show_whitespace && end > start {
-            // 半角空白は太さ 1 のペンで塗る (fill)。タブと全角空白はその後で線の太さに戻す
-            pen(colours.mark, 1);
-            let bytes = scintilla::line_bytes(stc, line);
-            let text = &bytes[..((end - start) as usize).min(bytes.len())];
-            let mut i = 0;
-            while i < text.len() {
-                let pos = start + i as i32;
-                match text[i] {
-                    b' ' => {
-                        let (x, y) = point(pos);
-                        let width = width_at(pos, 1, x, y, m.cell);
-                        draw_space(dc, m.thin, x, y, width, height);
-                        i += 1;
-                    }
-                    b'\t' => {
-                        let (x, y) = point(pos);
-                        let width = width_at(pos, 1, x, y, m.cell);
-                        pen(colours.mark, m.thin);
-                        draw_tab(dc, &m, x, y, width, height);
-                        pen(colours.mark, 1);
-                        i += 1;
-                    }
-                    _ if text[i..].starts_with(WIDE_SPACE.as_bytes()) => {
-                        let (x, y) = point(pos);
-                        let width = width_at(pos, 3, x, y, m.cell * 2);
-                        pen(colours.mark, m.thin);
-                        draw_wide_space(dc, x, y, width, height);
-                        pen(colours.mark, 1);
-                        i += WIDE_SPACE.len();
-                    }
-                    _ => i += 1,
+        // 段の先頭の位置 (折り返していなければ行の先頭だけ)
+        let mut starts = vec![start];
+        if rows > 1 && has_marks {
+            let x = origin_x(start);
+            for k in 1..rows {
+                let y = line_top + k * row_height + row_height / 2;
+                let pos = scintilla::position_from_point(stc, x, y);
+                starts.push(pos.clamp(*starts.last().unwrap_or(&start), end));
+            }
+        }
+
+        let mut cum = 0;
+        let mut end_x = None;
+        for (k, seg_start) in starts.iter().copied().enumerate() {
+            let seg_end = starts.get(k + 1).copied().unwrap_or(end);
+            let last = k + 1 == starts.len();
+            let y = line_top + k as i32 * row_height + extra_top;
+            let seg = text
+                .get((seg_start - start) as usize..(seg_end - start) as usize)
+                .unwrap_or("");
+            if !seg.contains([' ', '\t', '\u{3000}']) {
+                // 記号の無い段: 次の段のタブ位置のために幅だけ進めることはしない (タブが出てきたら
+                // 計算が合わず、その段は聞き直しになるだけ)
+                continue;
+            }
+            let x0 = origin_x(start);
+            let (marks, after_last, to_end) =
+                layout_segment(stc, &mut widths, seg, &mut cum, tab_px);
+            // 計算が合っているか 1 か所で確かめる: 段の終わりまで分かっていて最後の段ならそこ
+            // (改行の記号の位置にも使う)、そうでなければ最後の記号の直後
+            let ok = match to_end {
+                Some(width) if last => {
+                    let actual = scintilla::point_x_from_position(stc, end);
+                    end_x = Some(actual);
+                    actual == x0 + width
                 }
+                _ => {
+                    let last_mark = seg.rfind([' ', '\t', '\u{3000}']).unwrap_or(0);
+                    let len = seg[last_mark..].chars().next().map_or(1, char::len_utf8);
+                    let pos = seg_start + (last_mark + len) as i32;
+                    if pos >= seg_end && !last {
+                        // 段の終わりの位置は次の段の先頭として返るので、最後の記号の頭で確かめる
+                        let width = marks.last().map_or(0, |mark| mark.width);
+                        scintilla::point_x_from_position(stc, seg_start + last_mark as i32)
+                            == x0 + after_last - width
+                    } else {
+                        scintilla::point_x_from_position(stc, pos) == x0 + after_last
+                    }
+                }
+            };
+            pen(colours.mark, 1);
+            if ok {
+                for mark in &marks {
+                    draw_mark(
+                        dc,
+                        &m,
+                        &pen,
+                        colours.mark,
+                        mark.kind,
+                        x0 + mark.x,
+                        y,
+                        mark.width,
+                        height,
+                    );
+                }
+                continue;
+            }
+            // 計算が合わなかった段: 空白の並びごとに先頭の位置を聞き、並びの中は幅を足していく
+            let mut next_x: Option<i32> = None;
+            let mut chars = seg.char_indices().peekable();
+            while let Some((i, c)) = chars.next() {
+                if !matches!(c, ' ' | '\t' | '\u{3000}') {
+                    next_x = None;
+                    continue;
+                }
+                let pos = seg_start + i as i32;
+                let x = next_x.unwrap_or_else(|| scintilla::point_x_from_position(stc, pos));
+                let after = pos + c.len_utf8() as i32;
+                let width = if c == '\t' {
+                    // タブの幅は位置で決まるので、次の文字の位置を聞く (段の終わりなら半角 1 つぶん)
+                    if after < seg_end || last {
+                        (scintilla::point_x_from_position(stc, after) - x).max(1)
+                    } else {
+                        m.cell
+                    }
+                } else {
+                    let style = scintilla::style_at(stc, pos);
+                    *style_widths.entry((style, c)).or_insert_with(|| {
+                        scintilla::text_width(stc, style, c.encode_utf8(&mut [0; 4]))
+                    })
+                };
+                draw_mark(
+                    dc,
+                    &m,
+                    &pen,
+                    colours.mark,
+                    if c == '\u{3000}' { b'w' } else { c as u8 },
+                    x,
+                    y,
+                    width,
+                    height,
+                );
+                next_x = Some(x + width);
             }
         }
 
-        if composing_line == Some(line) {
+        if !draw_end {
             continue;
         }
-        match line_ending_of(stc, line, count) {
-            Some(eol) if e.show_eol => {
+        // 改行と EOF は行末のすぐ後ろ (折り返した行は最後の段)
+        let x = end_x.unwrap_or_else(|| scintilla::point_x_from_position(stc, end));
+        let y = line_top + (rows - 1) * row_height + extra_top;
+        match eol {
+            Some(eol) => {
                 // 設定と違う改行は色で強調する。線は同じ細さ: 太いペンは線の左右どちらかに寄って
                 // 描かれるので、矢印が左右対称にならない。矢印は太さ 1 のペンで塗って描く (fill)
                 let colour = if eol == base {
@@ -269,30 +479,63 @@ pub fn paint(
                     different_colour(eol)
                 };
                 pen(colour, 1);
-                let (x, y) = point(end);
                 draw_line_ending(dc, &m, eol, x + m.thin, y, height);
             }
-            None if e.show_eof => {
-                let (x, y) = point(end);
+            None => {
                 draw_eof(dc, stc, settings, &m, x, y, height);
+                // draw_eof はペンを替える
+                current_pen.set((u32::MAX, 0));
             }
-            _ => {}
         }
     }
     dc.destroy_clipping_region();
+    WIDTHS.set(widths);
 }
 
-/// 線分。wx の線は終点の画素を描かないので、終点も打つ
-fn stroke(dc: &PaintDc, x1: i32, y1: i32, x2: i32, y2: i32) {
-    dc.draw_line(x1, y1, x2, y2);
-    dc.draw_line(x2, y2, x1, y1);
+/// 空白・タブ・全角空白の記号を 1 つ描く。半角空白は太さ 1 のペンで塗る (fill)。タブと全角空白は線の太さ
+#[allow(clippy::too_many_arguments)]
+fn draw_mark(
+    dc: &PaintDc,
+    m: &Metrics,
+    pen: &impl Fn(u32, i32),
+    colour: u32,
+    kind: u8,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) {
+    match kind {
+        b' ' => {
+            pen(colour, 1);
+            draw_space(dc, m.thin, x, y, width, height);
+        }
+        b'\t' => {
+            pen(colour, m.thin);
+            draw_tab(dc, m, x, y, width, height);
+        }
+        _ => {
+            pen(colour, m.thin);
+            draw_wide_space(dc, x, y, width, height);
+        }
+    }
 }
 
-/// 塗った長方形 (左上 `x`, `y`・幅 `w`・高さ `h`)。太さ 1 のペンで 1 行ずつ引く: 線の端の画素や
-/// 太いペンの角の扱いに頼らないので、角まで欠けずに出る (呼ぶ前にペンの太さを 1 にしておくこと)
+// 描く呼び出しは 1 回ごとに時間がかかる (数 µs。空白は画面に何百個も出る) ので、記号 1 つを
+// なるべく少ない呼び出しで描く。折れ線 (`draw_lines`) は最後の点の画素だけ描かない
+
+/// 塗った長方形 (左上 `x`, `y`・幅 `w`・高さ `h`)。太さ 1 のペンで 1 本ずつ引く: 線の端の画素や
+/// 太いペンの角の扱いに頼らないので、角まで欠けずに出る (呼ぶ前にペンの太さを 1 にしておくこと)。
+/// 縦長なら縦線、横長なら横線で引く (本数の少ない方)
 fn fill(dc: &PaintDc, x: i32, y: i32, w: i32, h: i32) {
-    for row in 0..h.max(0) {
-        dc.draw_line(x, y + row, x + w, y + row);
+    if h > w {
+        for column in 0..w.max(0) {
+            dc.draw_line(x + column, y, x + column, y + h);
+        }
+    } else {
+        for row in 0..h.max(0) {
+            dc.draw_line(x, y + row, x + w, y + row);
+        }
     }
 }
 
@@ -306,19 +549,45 @@ fn draw_space(dc: &PaintDc, t: i32, x: i32, y: i32, width: i32, height: i32) {
     // 底の線の位置と、両端の立ち上がりの高さ
     let bottom = y + height - (height / 5).max(2) + t;
     let rise = ((height / 7).max(2) - t).max(t);
+    if t == 1 {
+        // 太さ 1 なら折れ線 1 本で同じ形になる: 左の立ち上がり → 底 → 右の立ち上がり
+        let right = left + w - 1;
+        dc.draw_lines(
+            &[
+                DcPoint::new(left, bottom - rise),
+                DcPoint::new(left, bottom),
+                DcPoint::new(right, bottom),
+                DcPoint::new(right, bottom - rise - 1),
+            ],
+            0,
+            0,
+        );
+        return;
+    }
     fill(dc, left, bottom - rise, t, rise + t);
     fill(dc, left, bottom, w, t);
     fill(dc, left + w - t, bottom - rise, t, rise + t);
 }
 
-/// タブ: 先頭に右向きの矢印 (タブの幅が広くても矢印は 1 文字半まで)
+/// タブ: 先頭に右向きの矢印 (タブの幅が広くても矢印は 1 文字半まで)。折れ線 1 本で描く:
+/// 軸 → 上の矢じり → 先へ戻る → 下の矢じり → 先へ戻る
 fn draw_tab(dc: &PaintDc, m: &Metrics, x: i32, y: i32, width: i32, height: i32) {
     let left = x + 1;
     let right = x + width.min(m.cell * 3 / 2).max(m.cell) - 2;
     let mid = y + height * 11 / 20;
-    stroke(dc, left, mid, right, mid);
-    stroke(dc, right, mid, right - m.head, mid - m.head);
-    stroke(dc, right, mid, right - m.head, mid + m.head);
+    let tip = DcPoint::new(right, mid);
+    dc.draw_lines(
+        &[
+            DcPoint::new(left, mid),
+            tip,
+            DcPoint::new(right - m.head, mid - m.head),
+            tip,
+            DcPoint::new(right - m.head, mid + m.head),
+            tip,
+        ],
+        0,
+        0,
+    );
 }
 
 /// 全角空白: 枠

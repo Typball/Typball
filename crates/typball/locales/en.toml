@@ -123,7 +123,7 @@ untitled = "Untitled"
 [template]
 # Template for new files (Ctrl+N and the tab opened at startup). Override with [filetypes.*] template
 md = ""
-typ = "#set page(paper: \"a4\")\n#set text(font: \"Noto Sans JP\", lang: \"en\", size: 11pt)\n\n= New document\n\n"
+typ = "#set page(paper: \"a4\")\n#set text(font: \"Noto Sans JP\", lang: \"en\", size: 12pt)\n\n= New document\n\n"
 
 [pane]
 outline = "Outline"
@@ -494,7 +494,8 @@ cancelled = "Update cancelled"
 title = "Preview"
 font_face = "Font:"
 font_size = "Font size (pt):"
-font_note = "Used as the Typst default when a document does not set #set text(font:), for the Markdown preview body, and for text shown in the preview window. The bundled Noto Sans JP works without installing it. The editor font is set separately on the Editor page."
+tab_width = "Tab width (characters):"
+font_note = "Used as the Typst default when a document does not set #set text(font:), for the Markdown preview body, and for text shown in the preview window. The bundled Noto Sans JP works without installing it. The editor font is set separately on the Editor page.\nThe tab width applies to text shown in the preview window and to code in the Markdown preview (it is separate from the editor's tab width)."
 markdown_mode = "Markdown preview:"
 markdown_mode_auto = "Automatic (site mode inside a site project)"
 markdown_mode_markdown = "Render Markdown as HTML"

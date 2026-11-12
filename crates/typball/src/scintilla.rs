@@ -41,7 +41,6 @@ pub const SCI_SETMARGINLEFT: i32 = 2155;
 pub const SCI_GETMARGINLEFT: i32 = 2156;
 pub const SCI_SETMARGINRIGHT: i32 = 2157;
 pub const SCI_POINTXFROMPOSITION: i32 = 2164;
-pub const SCI_POINTYFROMPOSITION: i32 = 2165;
 pub const SCI_VISIBLEFROMDOCLINE: i32 = 2220;
 pub const SCI_DOCLINEFROMVISIBLE: i32 = 2221;
 pub const SCI_SETFIRSTVISIBLELINE: i32 = 2613;
@@ -228,7 +227,8 @@ pub fn set_first_visible_line(stc: &StyledTextCtrl, visible: i32) {
     send(stc, SCI_SETFIRSTVISIBLELINE, visible.max(0) as usize, 0);
 }
 
-/// 文書の行が折り返しで何段になっているか
+/// 文書の行が折り返しで何段になっているか。遅い (行を組み直す) ので、描画のたびに行の数だけ呼ばないこと。
+/// 画面に出ている行なら `visible_from_doc_line(line + 1) - visible_from_doc_line(line)` で分かる
 pub fn wrap_count(stc: &StyledTextCtrl, line: i32) -> i32 {
     send(stc, SCI_WRAPCOUNT, line as usize, 0) as i32
 }
@@ -243,13 +243,24 @@ pub fn text_width(stc: &StyledTextCtrl, style: i32, text: &str) -> i32 {
     send_str(stc, SCI_TEXTWIDTH, style as usize, text) as i32
 }
 
-/// 文書位置のクライアント座標 x / y (行の先頭、折り返し段の先頭)
+/// 文書位置のクライアント座標 x。1 回ごとに計測用の描画面を作るので遅い (0.2 ms 近く)。描画のたびに
+/// 行や文字の数だけ呼ばないこと (`SCI_POINTYFROMPOSITION` / `SCI_WRAPCOUNT` / `SCI_TEXTWIDTH` も同じ)。
+/// 行の上端と段の数は `visible_from_doc_line` から計算できる (marks.rs の `paint`)
 pub fn point_x_from_position(stc: &StyledTextCtrl, pos: i32) -> i32 {
     send(stc, SCI_POINTXFROMPOSITION, 0, pos as isize) as i32
 }
 
-pub fn point_y_from_position(stc: &StyledTextCtrl, pos: i32) -> i32 {
-    send(stc, SCI_POINTYFROMPOSITION, 0, pos as isize) as i32
+/// クライアント座標に一番近い文書位置 (折り返した段の左端を渡すと、その段の先頭の位置)。
+/// `point_*_from_position` と同じく遅い (1 回ごとに計測用の描画面を作る)
+pub fn position_from_point(stc: &StyledTextCtrl, x: i32, y: i32) -> i32 {
+    const SCI_POSITIONFROMPOINT: i32 = 2022;
+    send(stc, SCI_POSITIONFROMPOINT, x as usize, y as isize) as i32
+}
+
+/// 文書位置のスタイル番号 (速い)
+pub fn style_at(stc: &StyledTextCtrl, pos: i32) -> i32 {
+    const SCI_GETSTYLEAT: i32 = 2010;
+    send(stc, SCI_GETSTYLEAT, pos as usize, 0) as i32 & 0xFF
 }
 
 /// マージンに表示するマーカーのビットマスク

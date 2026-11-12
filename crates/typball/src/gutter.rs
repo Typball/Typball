@@ -244,12 +244,18 @@ fn paint_gutter(panel: &Panel, stc: &StyledTextCtrl) {
             .min(last_line);
 
     let extra_top = editor::line_extra(stc, &crate::settings::get()).0;
+    // 行の上端と段の数は、画面の何段目かから計算する。Scintilla に位置を聞く問い合わせ
+    // (SCI_POINTYFROMPOSITION / SCI_WRAPCOUNT) は 1 回ごとに計測用の描画面を作るので遅い (marks.rs)
+    let line_h = scintilla::text_height(stc, first_doc);
+    let mut row = scintilla::visible_from_doc_line(stc, first_doc);
     for line in first_doc..=last_doc {
-        let y = scintilla::point_y_from_position(stc, stc.position_from_line(line));
+        let next_row = scintilla::visible_from_doc_line(stc, line + 1);
+        let rows = (next_row - row).max(1);
+        let y = (row - first_visible) * line_h;
+        row = next_row;
         if y >= height {
             break;
         }
-        let line_h = scintilla::text_height(stc, line);
         let change = if strip > 0 {
             editor::line_change(stc, line)
         } else {
@@ -261,7 +267,6 @@ fn paint_gutter(panel: &Panel, stc: &StyledTextCtrl) {
             LineChange::Unchanged => None,
         };
         if let Some(colour) = strip_colour {
-            let rows = scintilla::wrap_count(stc, line).max(1);
             dc.set_pen(rgb(colour), 1, PenStyle::Solid);
             dc.set_brush(rgb(colour), BrushStyle::Solid);
             dc.draw_rectangle(width - strip, y, strip, line_h * rows);

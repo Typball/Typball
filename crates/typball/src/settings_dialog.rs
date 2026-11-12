@@ -1142,8 +1142,9 @@ fn page_filetype(panel: &Panel, current: &Settings, readers: &mut Readers, ft: F
             &[("name", &tr(ft.name_key()))],
         ))
         .build();
+    // 普通の EDIT (Rich2 にしない理由は tab.rs のコンソールと同じ)
     let text = TextCtrl::builder(panel)
-        .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::DontWrap | TextCtrlStyle::Rich2)
+        .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::DontWrap)
         .build();
     text.set_value(&ft.template(current));
     if let Some(font) = Font::builder()
@@ -1153,6 +1154,8 @@ fn page_filetype(panel: &Panel, current: &Settings, readers: &mut Readers, ft: F
     {
         text.set_font(&font);
     }
+    // 雛形に入れたタブがエディタと同じ幅で見えるように (EDIT の既定は 8 文字)
+    crate::textctrl::keep_tab_width(&text, current, crate::textctrl::editor_tab_width);
     let reset = Button::builder(panel)
         .with_label(&tr("settings.files.template_reset"))
         .build();
@@ -1269,6 +1272,18 @@ fn page_preview(panel: &Panel, current: &Settings, readers: &mut Readers, _dialo
         SizerFlag::AlignLeft,
         0,
     );
+    // タブ幅 (プレビューウィンドウのテキスト表示と Markdown のコード)。エディタのタブ幅とは別
+    let tab_width = SpinCtrl::builder(panel)
+        .with_range(1, 16)
+        .with_initial_value(current.preview.tab_width)
+        .build();
+    grid.add(
+        &label(panel, "settings.preview.tab_width"),
+        0,
+        LABEL_FLAGS,
+        0,
+    );
+    grid.add(&tab_width, 0, SizerFlag::AlignLeft, 0);
     let font_note = StaticText::builder(panel)
         .with_label(&tr("settings.preview.font_note"))
         .build();
@@ -1346,6 +1361,7 @@ fn page_preview(panel: &Panel, current: &Settings, readers: &mut Readers, _dialo
             face.trim().to_string()
         };
         s.preview.font_size = font_size.value().clamp(6, 72);
+        s.preview.tab_width = tab_width.value().clamp(1, 16);
         s.preview.markdown_mode = mode
             .get_selection()
             .and_then(|i| MarkdownMode::ALL.get(i as usize).copied())

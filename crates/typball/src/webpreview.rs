@@ -922,7 +922,9 @@ fn body_font_css(settings: &settings::Settings) -> String {
         "-apple-system,\"Segoe UI\",\"Yu Gothic UI\",\"Meiryo\",\"Hiragino Sans\",",
         "\"Noto Sans JP\",sans-serif;"
     ));
-    css.push_str(&format!("font-size:{size}pt}}"));
+    // コードの中のタブの幅 (pre / code に受け継がれる)
+    let tab = settings.preview.tab_width.clamp(1, 16);
+    css.push_str(&format!("font-size:{size}pt;tab-size:{tab}}}"));
     css
 }
 
