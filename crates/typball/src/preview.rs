@@ -223,10 +223,11 @@ impl TypstView {
         });
     }
 
-    /// ソースをコンパイルして表示し、ステータスバーに診断を出す
-    pub fn render(&self, source: &str) -> Report {
+    /// ソースをコンパイルして表示し、ステータスバーに診断を出す。
+    /// `path` は文書の保存先 (未保存なら None)。画像などはそのフォルダを基準に読む
+    pub fn render(&self, source: &str, path: Option<&std::path::Path>) -> Report {
         let started = std::time::Instant::now();
-        let (doc, diagnostics) = typball_core::compile_doc(source);
+        let (doc, diagnostics) = typball_core::compile_doc(source, path);
         let elapsed_ms = started.elapsed().as_millis();
         let ok = doc.is_some();
         let pages = doc.as_ref().map(|d| d.page_count()).unwrap_or(0);

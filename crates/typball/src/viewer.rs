@@ -257,7 +257,8 @@ impl Viewer {
         let text = self.text.borrow().clone();
         match &self.content {
             Content::Typst(view) => {
-                view.render(&text);
+                let path = self.doc.borrow().path.clone();
+                view.render(&text, path.as_deref());
             }
             Content::Web(web) => {
                 let path = self.doc.borrow().path.clone();

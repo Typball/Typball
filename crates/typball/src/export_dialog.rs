@@ -652,14 +652,15 @@ pub fn show(parent: &Frame, source: &Source) -> Option<String> {
                 }
                 _ => {
                     let wait = BusyCursor::new(None);
-                    let outcome = export_typst(&text, format, &out, &export, |files| {
-                        let unconfirmed: Vec<PathBuf> = files
-                            .iter()
-                            .filter(|f| f.exists() && !(already_confirmed && **f == out))
-                            .cloned()
-                            .collect();
-                        unconfirmed.is_empty() || confirm_overwrite(&dialog, &unconfirmed)
-                    });
+                    let outcome =
+                        export_typst(&text, doc_path.as_deref(), format, &out, &export, |files| {
+                            let unconfirmed: Vec<PathBuf> = files
+                                .iter()
+                                .filter(|f| f.exists() && !(already_confirmed && **f == out))
+                                .cloned()
+                                .collect();
+                            unconfirmed.is_empty() || confirm_overwrite(&dialog, &unconfirmed)
+                        });
                     drop(wait);
                     match outcome {
                         Ok(Some(files)) => {
@@ -710,12 +711,13 @@ fn selected<'a>(choice: &Choice, values: &[&'a str]) -> Option<&'a str> {
 /// 書いたファイルの一覧を返す (確認で取りやめたら None)
 fn export_typst(
     text: &str,
+    doc_path: Option<&Path>,
     format: Format,
     out: &Path,
     export: &Export,
     confirm: impl Fn(&[PathBuf]) -> bool,
 ) -> Result<Option<Vec<PathBuf>>, String> {
-    let (doc, diagnostics) = typball_core::compile_doc(text);
+    let (doc, diagnostics) = typball_core::compile_doc(text, doc_path);
     let Some(doc) = doc else {
         return Err(diagnostics.join("\n"));
     };

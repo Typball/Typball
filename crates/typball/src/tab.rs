@@ -1183,7 +1183,8 @@ impl Tab {
         let started = std::time::Instant::now();
         match self.active_content(Pane::Preview) {
             Some(PaneContent::Preview(preview)) => {
-                let report = preview.render(&text);
+                let path = self.doc.borrow().path.clone();
+                let report = preview.render(&text, path.as_deref());
                 self.console_set(&typst_log(&report));
             }
             Some(PaneContent::Web(web)) => {
@@ -1194,7 +1195,8 @@ impl Tab {
             }
             _ if self.active_console().is_some() => match filetype {
                 FileType::Typ => {
-                    let (ok, diagnostics) = typball_core::check(&text);
+                    let path = self.doc.borrow().path.clone();
+                    let (ok, diagnostics) = typball_core::check(&text, path.as_deref());
                     let report = crate::preview::Report {
                         ok,
                         pages: 0,
@@ -1950,8 +1952,10 @@ impl Tab {
         // Markdown の WebView: 保存で画像が変わっているかもしれないのでキャッシュを更新させる
         if let Some(web) = self.active_web_preview() {
             web.on_saved();
-            self.request_render();
         }
+        // Typst も、画像や取り込んだファイルが変わっているかもしれないので組み直す
+        // (変わったファイルだけ読み直すので、何も変わっていなければ軽い)
+        self.request_render();
     }
 
     /// 編集行の強調を消す (表示メニュー)。`saved_only` なら保存済みの印だけ、
