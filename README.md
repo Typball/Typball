@@ -238,8 +238,26 @@ Typball --view ファイル              # プレビューウィンドウで開�
 Typball --new-instance ファイル      # 起動中の Typball に渡さず、別のプロセスで開く
 ```
 
+Markdown・Typst・図 (.tbdg) は、何も指定しなければプレビューウィンドウで開きます (読むために開くことが多いので)。
+プレビューウィンドウの「編集」でエディタへ移れます。いつもエディタで開きたいときは、
+「設定 → ファイル → (形式)」の「プレビューウィンドウで開く」を外します。テキスト (.txt) はエディタで開きます。
+
 Typball が起動しているときにファイルをダブルクリックすると、起動中の Typball のタブに入ります。
 インストーラー版では、ファイルの右クリックメニューに「Typball で編集」「Typball でプレビュー」が加わります。
+
+### 自動インデント
+
+Enter で改行したときに、新しい行の先頭へ字下げを入れます。「設定 → エディタ → 自動インデント」で選びます。
+
+| 選択肢 | 動き |
+|---|---|
+| 自動インデント無し | 字下げを入れません |
+| 前の行に従う (既定) | 改行した行と同じ字下げ (行頭の半角スペースとタブ) を入れます |
+
+- 字下げの途中で改行したときは、キャレットまでの分だけを入れます (字下げが二重になりません)。
+- 全角空白は字下げとして扱いません (段落の頭の 1 字下げが、次の行にも付いてしまわないように)。
+- 改行と字下げは、「元に戻す」1 回で戻ります。
+- 形式ごとに変えられます (下の「形式ごとのエディタ設定」)。
 
 ### 形式ごとのエディタ設定
 
@@ -293,6 +311,7 @@ line_spacing = 1            # 行間: 1 行の高さに足す px (0 でフォン
 tab_width = 4               # タブ幅 (半角の文字数)
 use_tabs = false            # Tab キーでタブ文字を入力する (false は次のタブ位置までのスペース)
 backspace = "soft_tab"      # Backspace でスペースを消すとき: "char" (1 個ずつ) / "soft_tab" (タブ位置で、その前がタブ幅ぶんスペースのときだけまとめて) / "tab_stop" (タブ位置にあるとき、続いているスペースをタブ幅ぶんまで) / "full_tab_stop" (前のタブ位置までスペースだけのとき、そこまで) / "to_tab_stop" (前のタブ位置まで、続いているスペースを) / "indent" (行頭の字下げだけ、前のタブ位置まで)
+auto_indent = "keep"        # 自動インデント (Enter で改行したときの字下げ): "none" (入れない) / "keep" (前の行に従う)
 wrap = "window"             # 折り返し: "none" / "window" (ウィンドウの右端) / "column" (指定文字数)
 wrap_column = 80            # wrap = "column" のときの文字数
 line_numbers = "left"       # "none" / "left" / "right" / "both"
@@ -323,7 +342,7 @@ show_console = true         # コンソール (Typst の診断 / Markdown の変
 show_actionbar = true
 sync_scroll_to_preview = true   # エディタをスクロールしたらプレビューも追従 (Markdown のプレビューのみ対応)
 sync_scroll_to_editor = true    # プレビューをスクロールしたらエディタも追従 (エディタを動かしたくなければ false)
-open_mode = "editor"        # ファイルを渡されて起動したとき (ダブルクリック): "editor" / "viewer" (プレビューウィンドウ)。--edit / --view が優先
+open_mode = "viewer"        # ファイルを渡されて起動したとき (ダブルクリック): "editor" / "viewer" (プレビューウィンドウ)。--edit / --view が優先。書かなければ、Markdown・Typst・図は "viewer"、テキストは "editor"
 template = """           # 新しいファイル (Ctrl+N / 起動時の新規タブ) の雛形。無ければ言語ごとの既定 (下の内容)
 #set page(paper: "a4")
 #set text(font: "Noto Sans JP", lang: "ja", size: 12pt)
@@ -344,7 +363,7 @@ show_outline = false
 [filetypes.md.editor]       # 形式ごとのエディタ設定の上書き。[editor] と同じ項目を、変えたいものだけ書く (書かない項目は [editor] の値)
 tab_width = 2               # Markdown だけタブ幅を 2 にする
 [filetypes.tbdg]            # 図。ペインや雛形は無く、使うのは開き方だけ
-open_mode = "editor"
+open_mode = "editor"        # 図をダブルクリックしたら、プレビューウィンドウではなく図エディタで開く
 
 [panes]                     # ペインの置き場: "left" / "right" / "bottom" (ヘッダの ▾ メニューかドラッグで変わる)
 outline = "left"

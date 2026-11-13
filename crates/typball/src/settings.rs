@@ -360,6 +360,23 @@ impl Wrap {
     pub const ALL: [Wrap; 3] = [Self::None, Self::Window, Self::Column];
 }
 
+/// 自動インデント: Enter で改行したときに、新しい行の先頭へ入れる字下げの決め方 (決めるのは `indent.rs`)。
+/// 決め方を足すときは、ここと `ALL`・`indent::for_new_line`・設定画面の文言 (`settings.editor.auto_indent_*`) に足す
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoIndent {
+    /// 字下げを入れない
+    None,
+    /// 前の行 (改行した行) と同じ字下げを入れる
+    #[default]
+    Keep,
+}
+
+impl AutoIndent {
+    /// 設定画面に並べる順
+    pub const ALL: [AutoIndent; 2] = [Self::None, Self::Keep];
+}
+
 /// 保存したとき、編集した行の強調をどうするか
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -468,6 +485,8 @@ pub struct Editor {
     /// Backspace でスペースを消すときの動作
     /// ("char" / "soft_tab" / "tab_stop" / "full_tab_stop" / "to_tab_stop" / "indent")
     pub backspace: Backspace,
+    /// 自動インデント: Enter で改行したときの字下げ ("none" = 入れない / "keep" = 前の行に従う)
+    pub auto_indent: AutoIndent,
     /// 行の折り返し ("none" / "window" / "column")
     pub wrap: Wrap,
     /// `wrap = "column"` のときの 1 行の文字数 (半角の数字の幅で数える)
@@ -507,6 +526,7 @@ impl Default for Editor {
             tab_width: 4,
             use_tabs: false,
             backspace: Backspace::SoftTab,
+            auto_indent: AutoIndent::Keep,
             wrap: Wrap::Window,
             wrap_column: 80,
             line_numbers: LineNumbers::Left,
@@ -571,6 +591,7 @@ editor_override! {
     tab_width: i32,
     use_tabs: bool,
     backspace: Backspace,
+    auto_indent: AutoIndent,
     wrap: Wrap,
     wrap_column: i32,
     line_numbers: LineNumbers,
@@ -744,8 +765,9 @@ pub struct PanesOverride {
     pub show_actionbar: Option<bool>,
     pub sync_scroll_to_preview: Option<bool>,
     pub sync_scroll_to_editor: Option<bool>,
-    /// ファイルを渡されて起動したときの開き方 (エディタ / プレビューウィンドウ)
-    pub open_mode: OpenMode,
+    /// ファイルを渡されて起動したときの開き方 (エディタ / プレビューウィンドウ)。None なら形式ごとの既定
+    /// (`FileType::default_open_mode`: プレビューのある形式と図はプレビューウィンドウ)
+    pub open_mode: Option<OpenMode>,
     /// ペインの置き場の大きさ (分割線を動かすと保存される。ダイアログには出ない)
     pub pane_sizes: PaneSizes,
     /// 新しいファイル (Ctrl+N、起動時の新規タブ) の雛形。None なら言語ごとの既定 (`FileType::default_template`)
@@ -1104,15 +1126,23 @@ line_numbers = \"both\"
         assert_eq!(s.panes.console, PanePosition::Bottom);
         let typ = crate::filetype::FileType::Typ;
         assert_eq!(typ.open_mode(&s), OpenMode::Viewer);
-        assert_eq!(
-            crate::filetype::FileType::Md.open_mode(&s),
-            OpenMode::Editor
-        );
         // open_mode だけ書いてもペインの既定は残る
         assert!(typ.panes(&s).show_preview);
         let text = toml::to_string(&Settings::default()).unwrap();
         assert!(text.contains("bottom_width = \"editor\""), "{text}");
-        assert!(text.contains("open_mode = \"editor\""), "{text}");
+        // 開き方は、既定のままなら書き出さない (形式ごとの既定が効く)
+        assert!(!text.contains("open_mode"), "{text}");
+
+        // 書かれていなければ形式ごとの既定: プレビューのある形式と図はプレビューウィンドウ、テキストはエディタ
+        let none = Settings::default();
+        use crate::filetype::FileType;
+        assert_eq!(FileType::Md.open_mode(&none), OpenMode::Viewer);
+        assert_eq!(FileType::Typ.open_mode(&none), OpenMode::Viewer);
+        assert_eq!(FileType::Tbdg.open_mode(&none), OpenMode::Viewer);
+        assert_eq!(FileType::Txt.open_mode(&none), OpenMode::Editor);
+        // 書かれていれば、そのとおり (前の版が書いた "editor" も、選んだものとして残る)
+        let chosen: Settings = toml::from_str("[filetypes.md]\nopen_mode = \"editor\"\n").unwrap();
+        assert_eq!(FileType::Md.open_mode(&chosen), OpenMode::Editor);
     }
 
     #[test]

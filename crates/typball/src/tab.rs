@@ -789,6 +789,18 @@ impl Tab {
                             return;
                         }
                     }
+                    // Enter: 改行して、新しい行に字下げを入れる (設定の「自動インデント」による)
+                    if matches!(
+                        key.get_key_code(),
+                        Some(WXK_RETURN) | Some(WXK_NUMPAD_ENTER)
+                    ) && !key.control_down()
+                        && !key.alt_down()
+                        && tab.auto_indent_newline()
+                    {
+                        // Scintilla に渡さない (渡すと、もう 1 行改行される)
+                        event.skip(false);
+                        return;
+                    }
                     // Backspace: キャレットの前のスペースをタブ位置までまとめて消す (設定の動作による)
                     if key.get_key_code() == Some(WXK_BACK)
                         && !key.control_down()
@@ -2336,6 +2348,30 @@ impl Tab {
         let bytes = scintilla::line_bytes(&stc, line);
         let before = bytes.get(..(pos - start).max(0) as usize)?;
         String::from_utf8(before.to_vec()).ok()
+    }
+
+    /// Enter: 改行して、設定 `editor.auto_indent` の決め方で新しい行に字下げを入れる。入れたら true。
+    /// 入れる字下げが無いとき (自動インデント無し、字下げの無い行) と、複数箇所を選択しているときは
+    /// 何もしない (呼ぶ側が Scintilla のふつうの改行に任せる)
+    fn auto_indent_newline(&self) -> bool {
+        let stc = self.stc;
+        let mode = editor::settings_for(&stc).editor.auto_indent;
+        if mode == settings::AutoIndent::None || scintilla::selections(&stc) > 1 {
+            return false;
+        }
+        // 選択範囲があれば、その先頭で改行する (選択範囲は改行に置き換わる)
+        let Some(before) = self.line_before(stc.get_selection_start()) else {
+            return false;
+        };
+        let indent = crate::indent::for_new_line(mode, &before);
+        if indent.is_empty() {
+            return false;
+        }
+        // 改行は、この文書の改行コードで入れる (Scintilla の改行と同じ)。改行と字下げで 1 回の Undo
+        let eol = scintilla::eol_mode(&stc).as_str();
+        stc.replace_selection(&format!("{eol}{indent}"));
+        stc.ensure_caret_visible();
+        true
     }
 
     /// Tab キー (スペースを入力する設定のとき): 次のタブ位置までのスペースを入れる。入れたら true。

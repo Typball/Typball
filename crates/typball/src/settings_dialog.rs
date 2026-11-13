@@ -17,9 +17,9 @@ use crate::fileio::{Encoding, LineEnding};
 use crate::filetype::FileType;
 use crate::i18n::{self, tr, tr_args};
 use crate::settings::{
-    self, Backspace, BottomWidth, Channel, ExternalChange, InstanceMode, LastTab, LineNumbers,
-    MarkdownMode, OpenMode, Panes, PanesOverride, RulerTabs, SaveMethod, SavedChanges, Settings,
-    Theme, Wrap,
+    self, AutoIndent, Backspace, BottomWidth, Channel, ExternalChange, InstanceMode, LastTab,
+    LineNumbers, MarkdownMode, OpenMode, Panes, PanesOverride, RulerTabs, SaveMethod, SavedChanges,
+    Settings, Theme, Wrap,
 };
 
 /// OK が押されたときに呼ばれる読み戻し処理の集まり
@@ -692,6 +692,31 @@ fn editor_form(
     );
     grid.add(&backspace, 0, SizerFlag::AlignLeft, 0);
 
+    // 自動インデント (Enter で改行したときの字下げ): AutoIndent::ALL の並び順
+    let auto_indent = choice_with(
+        panel,
+        AutoIndent::ALL
+            .iter()
+            .map(|mode| {
+                tr(match mode {
+                    AutoIndent::None => "settings.editor.auto_indent_none",
+                    AutoIndent::Keep => "settings.editor.auto_indent_keep",
+                })
+            })
+            .collect(),
+    );
+    let selected = AutoIndent::ALL
+        .iter()
+        .position(|mode| *mode == values.auto_indent)
+        .unwrap_or(0);
+    auto_indent.set_selection(selected as u32);
+    let auto_indent_check = head(
+        "settings.editor.auto_indent",
+        over_now.auto_indent.is_some(),
+        Rc::new(move |on| auto_indent.enable(on)),
+    );
+    grid.add(&auto_indent, 0, SizerFlag::AlignLeft, 0);
+
     // 折り返し: Wrap::ALL の並び順。文字数は「指定文字数で折り返す」のときだけ使う
     let wrap = choice_with(panel, Wrap::ALL.iter().map(|v| tr(wrap_key(*v))).collect());
     let selected = Wrap::ALL
@@ -832,6 +857,10 @@ fn editor_form(
             .get_selection()
             .and_then(|i| Backspace::ALL.get(i as usize).copied())
             .unwrap_or_default();
+        e.auto_indent = auto_indent
+            .get_selection()
+            .and_then(|i| AutoIndent::ALL.get(i as usize).copied())
+            .unwrap_or_default();
         e.wrap = wrap
             .get_selection()
             .and_then(|i| Wrap::ALL.get(i as usize).copied())
@@ -880,6 +909,7 @@ fn editor_form(
                 tab_width: on(&tab_width_check).then_some(e.tab_width),
                 use_tabs: on(&tab_key_check).then_some(e.use_tabs),
                 backspace: on(&backspace_check).then_some(e.backspace),
+                auto_indent: on(&auto_indent_check).then_some(e.auto_indent),
                 wrap: on(&wrap_check).then_some(e.wrap),
                 wrap_column: on(&wrap_column_check).then_some(e.wrap_column),
                 line_numbers: on(&line_numbers_check).then_some(e.line_numbers),
@@ -913,6 +943,7 @@ fn override_summary(over: &settings::EditorOverride) -> String {
         (over.tab_width.is_some(), "settings.editor.tab_width"),
         (over.use_tabs.is_some(), "settings.editor.tab_key"),
         (over.backspace.is_some(), "settings.editor.backspace"),
+        (over.auto_indent.is_some(), "settings.editor.auto_indent"),
         (over.wrap.is_some(), "settings.editor.wrap"),
         (
             over.wrap_column.is_some(),
@@ -1297,12 +1328,19 @@ fn page_filetype_tbdg(panel: &Panel, current: &Settings, readers: &mut Readers, 
     panel.set_sizer(sizer, true);
     intro.wrap(px(520));
     readers.push(Box::new(move |s| {
-        ft.overrides_mut(s).open_mode = if in_viewer.is_checked() {
-            OpenMode::Viewer
-        } else {
-            OpenMode::Editor
-        };
+        ft.overrides_mut(s).open_mode = chosen_open_mode(ft, in_viewer.is_checked());
     }));
+}
+
+/// 「プレビューウィンドウで開く」のチェックを、設定に書く値にする。形式の既定と同じなら書かない (None):
+/// 既定のままにしてある人には、後で既定が変わったときにそれが効く
+fn chosen_open_mode(ft: FileType, in_viewer: bool) -> Option<OpenMode> {
+    let mode = if in_viewer {
+        OpenMode::Viewer
+    } else {
+        OpenMode::Editor
+    };
+    (mode != ft.default_open_mode()).then_some(mode)
 }
 
 /// 形式ごとの設定: 開いたときのペインとバー、スクロール同期 (対応する形式だけ)、
@@ -1512,11 +1550,7 @@ fn page_filetype(
             ft.overrides(s),
         );
         if let Some(cb) = &in_viewer {
-            panes.open_mode = if cb.is_checked() {
-                OpenMode::Viewer
-            } else {
-                OpenMode::Editor
-            };
+            panes.open_mode = chosen_open_mode(ft, cb.is_checked());
         }
         let value = text.get_value();
         // 既定のままなら書き出さない (表示言語を変えたときに既定も切り替わるように)

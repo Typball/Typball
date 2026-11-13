@@ -302,6 +302,9 @@ bottom_width_window = "Window width (spans under the side panes)"
 show_toolbar = "Show the toolbar"
 
 [settings.editor]
+auto_indent = "Auto indent:"
+auto_indent_none = "No auto indent"
+auto_indent_keep = "Same as the previous line"
 title = "Editor"
 font_face = "Font:"
 font_size = "Font size (pt):"

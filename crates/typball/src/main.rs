@@ -56,6 +56,7 @@ mod gutter;
 mod i18n;
 #[cfg(windows)]
 mod ime_win;
+mod indent;
 mod instance;
 mod marks;
 mod mdhtml;

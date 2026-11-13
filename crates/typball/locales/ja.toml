@@ -302,6 +302,9 @@ bottom_width_window = "ウィンドウの幅 (左右のペインの下にも広�
 show_toolbar = "ツールバーを表示する"
 
 [settings.editor]
+auto_indent = "自動インデント:"
+auto_indent_none = "自動インデント無し"
+auto_indent_keep = "前の行に従う"
 title = "エディタ"
 font_face = "フォント:"
 font_size = "フォントサイズ (pt):"

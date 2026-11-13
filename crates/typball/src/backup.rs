@@ -1,7 +1,7 @@
 //! 未保存の文書のスナップショット (クラッシュ・強制終了からの復元)
 //!
 //! Notepad++ の periodic backup / VSCode の hot exit と同じ仕組み。未保存の変更があるタブの
-//! 全文を数秒ごとに設定フォルダの `backup/<pid>/` に書き、保存するか閉じたら消す。
+//! 全文を数秒ごとに設定フォルダの `Backup/<pid>/` に書き、保存するか閉じたら消す。
 //! 次の起動時に、もう動いていないプロセスのフォルダが残っていれば (= 落ちた・強制終了した)、
 //! その中身を「未保存の変更あり」のタブとして開き直す。
 //!
@@ -108,13 +108,44 @@ pub fn write_async(id: u64, text: String, meta: Meta) -> bool {
 
 const LOCK_NAME: &str = "lock";
 
-/// スナップショット全体のフォルダ (設定ファイルと同じ場所の `backup`)
+/// スナップショットのフォルダの名前。設定フォルダの中の名前は、`Settings.toml` と同じく頭を大文字にする
+const DIR_NAME: &str = "Backup";
+/// 前の版での名前 (全部小文字だった)
+const OLD_DIR_NAME: &str = "backup";
+
+/// スナップショット全体のフォルダ (設定ファイルと同じ場所の `Backup`)
 pub fn root_dir() -> PathBuf {
-    settings::path()
+    let parent = settings::path()
         .parent()
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("backup")
+        .unwrap_or_else(|| PathBuf::from("."));
+    // 前の版が作った `backup` があれば、最初に 1 回だけ名前を変える
+    static RENAMED: std::sync::Once = std::sync::Once::new();
+    RENAMED.call_once(|| rename_old_dir(&parent));
+    parent.join(DIR_NAME)
+}
+
+/// 前の版のフォルダ (`backup`) を今の名前 (`Backup`) に変える。中に残っているスナップショット (落ちたときのもの) も
+/// 一緒に移るので、名前を変えた後の起動でも復元できる。
+///
+/// 大文字と小文字を区別しないファイルシステム (Windows、macOS の既定) では、`Backup` で開いても `backup` が開くので、
+/// 何もしなくても動くが、見える名前が小文字のまま残る。名前の変更に失敗しても (ほかの Typball が中のファイルを
+/// 開いている、など) 困らない: 区別しないファイルシステムでは同じフォルダを使い続け、区別するファイルシステムでは
+/// 新しいフォルダを作る
+fn rename_old_dir(parent: &Path) {
+    // フォルダの実際の名前を調べる (`exists` は、区別しないファイルシステムではどちらの名前でも true になる)
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+    let names: Vec<std::ffi::OsString> = entries
+        .flatten()
+        .filter(|entry| entry.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .map(|entry| entry.file_name())
+        .collect();
+    let has = |name: &str| names.iter().any(|n| n == name);
+    if has(OLD_DIR_NAME) && !has(DIR_NAME) {
+        let _ = fs::rename(parent.join(OLD_DIR_NAME), parent.join(DIR_NAME));
+    }
 }
 
 /// このプロセスのフォルダ
@@ -264,5 +295,42 @@ mod tests {
         assert_eq!(got[1].text, "two");
         assert_eq!(got[1].meta.filetype, "md");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// フォルダの中の、フォルダの実際の名前
+    fn dir_names(parent: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(parent)
+            .unwrap()
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn the_old_folder_name_is_renamed_with_its_contents() {
+        let parent =
+            std::env::temp_dir().join(format!("typball-backup-rename-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&parent);
+        // 前の版が残したスナップショット
+        let old = parent.join(OLD_DIR_NAME).join("1234");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(text_path(&old, 7), "unsaved").unwrap();
+
+        rename_old_dir(&parent);
+        assert_eq!(dir_names(&parent), [DIR_NAME]);
+        let moved = parent.join(DIR_NAME).join("1234");
+        assert_eq!(fs::read_to_string(text_path(&moved, 7)).unwrap(), "unsaved");
+
+        // もう一度呼んでも、そのまま
+        rename_old_dir(&parent);
+        assert_eq!(dir_names(&parent), [DIR_NAME]);
+        // 何も無いフォルダでは何も作らない
+        let empty = parent.join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        rename_old_dir(&empty);
+        assert!(dir_names(&empty).is_empty());
+        let _ = fs::remove_dir_all(&parent);
     }
 }

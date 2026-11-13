@@ -162,7 +162,18 @@ impl FileType {
 
     /// ファイルを渡されて起動したときの開き方 (エディタのタブ / プレビューウィンドウ)
     pub fn open_mode(self, settings: &Settings) -> OpenMode {
-        self.overrides(settings).open_mode
+        self.overrides(settings)
+            .open_mode
+            .unwrap_or_else(|| self.default_open_mode())
+    }
+
+    /// 設定に書かれていないときの開き方: 読むために開くことの多い形式 (Markdown・Typst・図) は
+    /// プレビューウィンドウ、テキストはエディタ。プレビューウィンドウからは「編集」でエディタへ移れる
+    pub fn default_open_mode(self) -> OpenMode {
+        match self {
+            Self::Md | Self::Typ | Self::Tbdg => OpenMode::Viewer,
+            Self::Txt => OpenMode::Editor,
+        }
     }
 
     /// 新しいファイル (Ctrl+N、起動時の新規タブ) の雛形。設定に無ければ言語ごとの既定
