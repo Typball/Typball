@@ -24,7 +24,7 @@ use wxdragon::prelude::*;
 use crate::filetype::FileType;
 use crate::mdstyle::Style;
 use crate::scintilla;
-use crate::settings::{SavedChanges, Settings, Wrap};
+use crate::settings::{self, SavedChanges, Settings, Wrap};
 
 // Scintilla の予約スタイル番号
 pub const STYLE_DEFAULT: i32 = 32;
@@ -56,8 +56,40 @@ const TEXT_GAP: i32 = 3;
 /// キャレットの太さ (DIP)
 const CARET_WIDTH: i32 = 2;
 
+thread_local! {
+    /// エディタごとのファイル種別 (種別ごとのエディタ設定を引くため)。`Tab` が作るときと種別が変わったときに入れる
+    static FILETYPES: std::cell::RefCell<std::collections::HashMap<usize, FileType>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// このエディタのファイル種別を覚える (種別ごとのエディタ設定 `[filetypes.*.editor]` を当てるため)
+pub fn set_filetype(stc: &StyledTextCtrl, filetype: FileType) {
+    FILETYPES.with(|m| m.borrow_mut().insert(stc.handle_ptr() as usize, filetype));
+}
+
+/// エディタを捨てるときに呼ぶ (同じアドレスに別のエディタが作られても、前の種別を引かないように)
+pub fn forget(stc: &StyledTextCtrl) {
+    FILETYPES.with(|m| m.borrow_mut().remove(&(stc.handle_ptr() as usize)));
+}
+
+/// `settings` を、このエディタのファイル種別で有効なエディタ設定に入れ替えたもの (読むためだけに使う)。
+/// このモジュールの関数は、渡された設定を必ずこれに通してから使う。通し済みの設定を渡しても結果は同じ
+pub fn resolved(stc: &StyledTextCtrl, settings: &Settings) -> Settings {
+    let filetype = FILETYPES.with(|m| m.borrow().get(&(stc.handle_ptr() as usize)).copied());
+    match filetype {
+        Some(filetype) => settings.clone().for_filetype(filetype),
+        None => settings.clone(),
+    }
+}
+
+/// このエディタで有効な、今の設定 ([`resolved`] に今の設定を通したもの)
+pub fn settings_for(stc: &StyledTextCtrl) -> Settings {
+    resolved(stc, &settings::get())
+}
+
 /// 編集行の帯の幅 (実ピクセル。強調オフなら 0)
 pub fn change_strip_width(stc: &StyledTextCtrl, settings: &Settings) -> i32 {
+    let settings = &resolved(stc, settings);
     if settings.editor.highlight_changes {
         stc.from_dip_int(CHANGE_STRIP_WIDTH)
     } else {
@@ -254,6 +286,7 @@ pub fn font(settings: &Settings, extra_pt: i32, bold: bool) -> Option<Font> {
 
 /// エディタの見た目 (フォント・マージン・配色) を初期化する
 pub fn setup_editor(stc: &StyledTextCtrl, settings: &Settings) {
+    let settings = &resolved(stc, settings);
     // レクサは使わず、アプリ側で全文にスタイルを付ける
     stc.set_lexer_typed(Lexer::Container);
 
@@ -290,6 +323,7 @@ pub fn setup_editor(stc: &StyledTextCtrl, settings: &Settings) {
 /// 配色をセットする。フォント変更後は style_clear_all で全スタイルが既定に戻るので
 /// そのたびに呼び直す。
 fn apply_colors(stc: &StyledTextCtrl, settings: &Settings) {
+    let settings = &resolved(stc, settings);
     if let Some(f) = font(settings, 0, false) {
         stc.style_set_font(STYLE_DEFAULT, &f);
     }
@@ -355,12 +389,14 @@ fn apply_colors(stc: &StyledTextCtrl, settings: &Settings) {
 
 /// 行間 (設定 `editor.line_spacing`) で行の上と下に足す高さ (px)。上を多めに分ける
 pub fn line_extra(stc: &StyledTextCtrl, settings: &Settings) -> (i32, i32) {
+    let settings = &resolved(stc, settings);
     let extra = stc.from_dip_int(settings.editor.line_spacing.clamp(0, 40));
     (extra - extra / 2, extra / 2)
 }
 
 /// 設定ダイアログで変えられる項目を既存のエディタに反映する
 pub fn apply_settings(stc: &StyledTextCtrl, settings: &Settings) {
+    let settings = &resolved(stc, settings);
     apply_colors(stc, settings);
     stc.set_wrap_mode(match settings.editor.wrap {
         Wrap::None => WrapMode::None,
@@ -391,6 +427,7 @@ pub fn digit_width(stc: &StyledTextCtrl) -> i32 {
 
 /// 左側マージンの幅を設定・行数・ズームに合わせる (変更が無ければ Scintilla 側で no-op)
 pub fn update_margins(stc: &StyledTextCtrl, settings: &Settings) {
+    let settings = &resolved(stc, settings);
     // 寸法は DIP で決めて、エディタのある画面の拡大率で実ピクセルにする。ウィンドウが拡大率の
     // 違うモニターへ移ったときは wx がマージン幅を比例で直す (wxStyledTextCtrl::OnDPIChanged) が、
     // 余白とキャレットは直さないので、ここで毎回合わせる (値が同じなら何もしない)
@@ -436,6 +473,7 @@ pub fn update_margins(stc: &StyledTextCtrl, settings: &Settings) {
 /// そのままエディタの右端で折り返す)。文字幅は数字 "0" の幅 (プロポーショナルフォントでは目安)。
 /// エディタの幅・マージン幅・ズームが変わるたびに呼ぶ
 pub fn update_wrap_margin(stc: &StyledTextCtrl, settings: &Settings) {
+    let settings = &resolved(stc, settings);
     let right = if settings.editor.wrap == Wrap::Column {
         let unit = scintilla::text_width(stc, STYLE_DEFAULT, "0").max(1);
         let text_start: i32 = (MARGIN_CHANGES..=MARGIN_SEPARATOR)
@@ -454,6 +492,7 @@ pub fn update_wrap_margin(stc: &StyledTextCtrl, settings: &Settings) {
 /// 左側マージンの行番号文字列を全行付け直す (編集した行は太字)。
 /// テキストマージンの文字列は行の挿入・削除でずれるので、変更のたびに呼ぶ。
 pub fn refresh_line_numbers(stc: &StyledTextCtrl, settings: &Settings) {
+    let settings = &resolved(stc, settings);
     if !settings.editor.line_numbers.left() {
         return;
     }
@@ -515,6 +554,7 @@ pub fn is_modified(stc: &StyledTextCtrl, line: i32) -> bool {
 
 /// 保存した: 未保存の編集行の印を、設定に従って「保存済み」の印に替えるか消す
 pub fn mark_changes_saved(stc: &StyledTextCtrl, settings: &Settings) {
+    let settings = &resolved(stc, settings);
     let keep = settings.editor.saved_changes == SavedChanges::Keep;
     let mut line = stc.marker_next(0, MARKER_MODIFIED_MASK);
     while line >= 0 {

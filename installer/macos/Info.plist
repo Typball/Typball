@@ -8,6 +8,7 @@
   「このアプリケーションで開く」に Typball が出て、設定 → 関連付け (assoc/macos.rs) で既定のアプリにできる。
   種類は UTI で指す:
     .typ  io.github.typball.typst      Typst には決まった UTI が無いので、下の UTExportedTypeDeclarations で定義する
+    .tbdg io.github.typball.diagram    Typball の図 (中身は SVG)。同じく UTExportedTypeDeclarations で定義する
     .md   net.daringfireball.markdown  macOS が知らない場合に備えて UTImportedTypeDeclarations にも書く
     .txt  public.plain-text            macOS の標準
   LSHandlerRank: Owner は「この種類の持ち主」(他に既定が無ければ Typball で開く)、Alternate は
@@ -47,6 +48,13 @@
       <key>CFBundleTypeIconFile</key><string>doc-txt</string>
       <key>LSItemContentTypes</key><array><string>public.plain-text</string></array>
     </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Typball Diagram</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Owner</string>
+      <key>CFBundleTypeIconFile</key><string>doc-tbdg</string>
+      <key>LSItemContentTypes</key><array><string>io.github.typball.diagram</string></array>
+    </dict>
   </array>
   <key>UTExportedTypeDeclarations</key><array>
     <dict>
@@ -56,6 +64,15 @@
       <key>UTTypeConformsTo</key><array><string>public.plain-text</string></array>
       <key>UTTypeTagSpecification</key><dict>
         <key>public.filename-extension</key><array><string>typ</string></array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key><string>io.github.typball.diagram</string>
+      <key>UTTypeDescription</key><string>Typball Diagram</string>
+      <key>UTTypeIconFile</key><string>doc-tbdg</string>
+      <key>UTTypeConformsTo</key><array><string>public.svg-image</string></array>
+      <key>UTTypeTagSpecification</key><dict>
+        <key>public.filename-extension</key><array><string>tbdg</string></array>
       </dict>
     </dict>
   </array>

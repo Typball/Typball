@@ -46,6 +46,75 @@
     }
   }
 
+  // --- Mermaid: ```mermaid のコードブロックを図にする -------------------------------------------
+  // Mermaid 本体 (大きい) は、コードブロックがあるときに初めて読み込む。描いた SVG はコードごとに覚えて、
+  // 本文を差し替えるたびに描き直さない (入力のたびに図がちらつかない)。書き間違いで描けないものは
+  // コードブロックのまま残し、理由を title に入れる。
+  var mermaidCache = {};
+  var mermaidLoading = null;
+  var mermaidSeq = 0;
+
+  function mermaidTheme() {
+    return document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "default";
+  }
+
+  function loadMermaid() {
+    if (!mermaidLoading) {
+      mermaidLoading = new Promise(function (resolve, reject) {
+        var script = document.createElement("script");
+        script.src = "/assets/mermaid.min.js";
+        script.onload = function () {
+          try {
+            window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: mermaidTheme() });
+            resolve(window.mermaid);
+          } catch (e) { reject(e); }
+        };
+        script.onerror = function () { reject(new Error("mermaid.min.js could not be loaded")); };
+        document.head.appendChild(script);
+      });
+    }
+    return mermaidLoading;
+  }
+
+  // root の中の Mermaid のコードブロックを図にする。全部済んだら解決する Promise を返す
+  function renderMermaid(root) {
+    var codes = root.querySelectorAll("pre > code.language-mermaid");
+    if (codes.length === 0) return Promise.resolve();
+    var chain = Promise.resolve();
+    var stale = false;
+    Array.prototype.forEach.call(codes, function (code) {
+      var pre = code.parentNode;
+      var text = code.textContent;
+      var key = mermaidTheme() + "\n" + text;
+      var show = function (svg) {
+        // 描いている間に本文が差し替わっていたら、後でもう一度 (覚えた SVG ですぐ入る)
+        if (!pre.parentNode || !document.contains(pre)) { stale = true; return; }
+        var box = document.createElement("div");
+        box.className = "tb-mermaid";
+        box.innerHTML = svg;
+        pre.parentNode.replaceChild(box, pre);
+      };
+      if (mermaidCache[key]) { show(mermaidCache[key]); return; }
+      chain = chain.then(loadMermaid).then(function (mermaid) {
+        mermaidSeq += 1;
+        return mermaid.render("tb-mermaid-" + mermaidSeq, text);
+      }).then(function (result) {
+        mermaidCache[key] = result.svg;
+        show(result.svg);
+      }).catch(function (e) {
+        // 書き間違いのとき、Mermaid はエラーの絵をページに残す
+        var left = document.getElementById("dtb-mermaid-" + mermaidSeq);
+        if (left) left.remove();
+        pre.classList.add("tb-mermaid-error");
+        pre.title = "Mermaid: " + String((e && e.message) || e).split("\n")[0];
+      });
+    });
+    return chain.then(function () {
+      var content = document.getElementById("content");
+      if (stale && content) return renderMermaid(content);
+    });
+  }
+
   function clamp01(v) { return Math.max(0, Math.min(1, v)); }
 
   window.typball = {
@@ -55,6 +124,7 @@
       var y = window.scrollY;
       content.innerHTML = html;
       renderMath(content);
+      renderMermaid(content);
       window.scrollTo(0, y);
     },
     scrollToLine: function (line, anchor) {
@@ -148,5 +218,8 @@
     var content = document.getElementById("content");
     if (content) renderMath(content);
     post("ready");
+    // 図まで描き終えたら知らせる (PDF の書き出しは、この知らせを待って印刷する)
+    var done = function () { post("rendered"); };
+    (content ? renderMermaid(content) : Promise.resolve()).then(done, done);
   });
 })();

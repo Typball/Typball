@@ -109,12 +109,14 @@ replace = "Replace (Ctrl+H)"
 txt = "Text (.txt)"
 md = "Markdown (.md)"
 typ = "Typst (.typ)"
+tbdg = "Diagram (.tbdg)"
 
 # Short names for the status bar
 [filetype.short]
 txt = "Text"
 md = "Markdown"
 typ = "Typst"
+tbdg = "Diagram"
 
 [document]
 # Name of a new document. With numbering enabled it becomes "Untitled-1.txt"
@@ -202,6 +204,7 @@ busy_cancel = "Stop waiting"
 
 [status]
 ok = "OK"
+diagram_committed = "The text being typed was applied. Repeat the operation"
 position = "Ln {line}, Col {col}"
 chars = "{n} chars"
 saved = "Saved: {path}"
@@ -257,6 +260,11 @@ Bundled fonts and software:
     Expat — MIT
     PCRE2 — BSD-3-Clause
     Microsoft Edge WebView2 SDK — BSD-3-Clause
+- maxGraph (diagram editor) — Apache License 2.0
+- Icons of the diagram editor
+    Affinity (network equipment symbols) — The Unlicense (public domain)
+    Isoflow isometric icons — MIT
+- Mermaid (Mermaid diagrams in Markdown and Typst) — MIT
 - Rust libraries (about 380) — MIT, Apache-2.0 and their other licenses
 
 This software is based in part on the work of the Independent JPEG Group.
@@ -334,6 +342,7 @@ show_eof = "End of file (EOF)"
 show_whitespace = "Spaces and tabs"
 
 [settings.files]
+diagram_intro = "Diagrams (.tbdg) open in the diagram editor. They have no text editor, pane or template settings."
 title = "Files"
 default_filetype = "Format of new tabs:"
 external_change = "When a file changes on disk:"
@@ -364,6 +373,15 @@ open_note = "How files are opened when passed by double-click or on the command 
 open_in_viewer = "Open in the preview window"
 template_note = "Template for new {name} files (Ctrl+N and the tab opened at startup):"
 template_reset = "&Reset to Default"
+
+[settings.override]
+button = "Override &editor settings..."
+none = "No overrides (uses the Editor settings)"
+some = "Overrides: {items}"
+title = "Editor settings for {name}"
+intro = "Change editor settings for {name} files only. Only the ticked items take the values here; the others keep the values of Settings > Editor (the defaults)."
+check_tip = "Tick to override this item for this file type only"
+clear = "&Reset all to defaults"
 
 [find]
 label = "Find:"
@@ -549,3 +567,7 @@ note = "Looks at the GitHub Releases page ({url}). Nothing happens when the netw
 system = "Follow system"
 light = "Light"
 dark = "Dark"
+
+[diagram]
+# Diagram editor (.tbdg). The strings inside the editor live in the page (assets/diagram/diagram.js)
+webview_missing = "The diagram editor cannot be shown because the WebView2 runtime was not found. Install the Microsoft Edge WebView2 Runtime. The file is left unchanged."

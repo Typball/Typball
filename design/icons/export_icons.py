@@ -8,9 +8,9 @@ SVG の描画は Edge (Chromium) のヘッドレスに任せる (透過背景の
 
 出力 (crates/typball/assets/icons/):
     Typball.ico            Windows のアプリアイコン (exe に埋め込む。build.rs)
-    doc-{typ,md,txt}.ico   Windows の関連付けアイコン (同上。インストーラーが Typball.exe,-101 などで参照)
+    doc-{typ,md,txt,tbdg}.ico   Windows の関連付けアイコン (同上。インストーラーが Typball.exe,-101 などで参照)
     Typball.icns           macOS の .app のアイコン (CI が Contents/Resources に置く)
-    doc-{typ,md,txt}.icns  macOS の書類アイコン (書類の種類を登録するときに使う)
+    doc-{typ,md,txt,tbdg}.icns  macOS の書類アイコン (書類の種類を登録するときに使う)
     Typball-256.rgba       256x256 の生 RGBA (include_bytes! で読む)。バージョン情報の大きなアイコンと
                            Linux のウィンドウアイコン (appicon.rs が必要な大きさに縮める)
 
@@ -30,7 +30,7 @@ DEST = os.path.normpath(os.path.join(HERE, "..", "..", "crates", "typball", "ass
 
 ICO_SIZES = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256]
 ICNS_SIZES = [16, 32, 64, 128, 256, 512, 1024]
-EXTS = ["typ", "md", "txt"]
+EXTS = ["typ", "md", "txt", "tbdg"]
 
 
 # 大きさごとにどの SVG を使うか

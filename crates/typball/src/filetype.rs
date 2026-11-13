@@ -14,17 +14,20 @@ pub enum FileType {
     Txt,
     Md,
     Typ,
+    /// 図 (中身は SVG)。テキストのエディタではなく図エディタ (`diagram.rs`) で開く
+    Tbdg,
 }
 
 impl FileType {
     /// メニュー・設定ダイアログに並べる順
-    pub const ALL: [FileType; 3] = [Self::Txt, Self::Md, Self::Typ];
+    pub const ALL: [FileType; 4] = [Self::Txt, Self::Md, Self::Typ, Self::Tbdg];
 
     /// 拡張子 (ドット無し) から判定する。知らない拡張子はプレーンテキスト扱い
     pub fn from_extension(ext: &str) -> FileType {
         match ext.to_ascii_lowercase().as_str() {
             "typ" => Self::Typ,
             "md" | "markdown" => Self::Md,
+            "tbdg" => Self::Tbdg,
             _ => Self::Txt,
         }
     }
@@ -42,7 +45,13 @@ impl FileType {
             Self::Txt => "txt",
             Self::Md => "md",
             Self::Typ => "typ",
+            Self::Tbdg => "tbdg",
         }
+    }
+
+    /// 図エディタで開く形式か (テキストのエディタ・検索・改行コードなどは使わない)
+    pub fn is_diagram(self) -> bool {
+        matches!(self, Self::Tbdg)
     }
 
     /// 表示名の i18n キー
@@ -51,6 +60,7 @@ impl FileType {
             Self::Txt => "filetype.txt",
             Self::Md => "filetype.md",
             Self::Typ => "filetype.typ",
+            Self::Tbdg => "filetype.tbdg",
         }
     }
 
@@ -60,6 +70,7 @@ impl FileType {
             Self::Txt => "filetype.short.txt",
             Self::Md => "filetype.short.md",
             Self::Typ => "filetype.short.typ",
+            Self::Tbdg => "filetype.short.tbdg",
         }
     }
 
@@ -91,7 +102,7 @@ impl FileType {
     /// 設定に何も書かれていないときのペイン構成
     pub fn default_panes(self) -> Panes {
         match self {
-            Self::Txt => Panes {
+            Self::Txt | Self::Tbdg => Panes {
                 show_outline: false,
                 show_preview: false,
                 show_console: false,
@@ -124,6 +135,7 @@ impl FileType {
             Self::Txt => &settings.filetypes.txt,
             Self::Md => &settings.filetypes.md,
             Self::Typ => &settings.filetypes.typ,
+            Self::Tbdg => &settings.filetypes.tbdg,
         }
         .clone()
     }
@@ -134,6 +146,7 @@ impl FileType {
             Self::Txt => &mut settings.filetypes.txt,
             Self::Md => &mut settings.filetypes.md,
             Self::Typ => &mut settings.filetypes.typ,
+            Self::Tbdg => &mut settings.filetypes.tbdg,
         }
     }
 
@@ -160,12 +173,13 @@ impl FileType {
     }
 
     /// 雛形の既定 (ロケールの `[template]`)。Typst は A4 縦・同梱の Noto Sans JP・日本語の指定と見出し、
-    /// Markdown は空、テキストは無し
+    /// Markdown は空、テキストは無し、図は何も描かれていない図
     pub fn default_template(self) -> String {
         match self {
             Self::Txt => String::new(),
             Self::Md => tr("template.md"),
             Self::Typ => tr("template.typ"),
+            Self::Tbdg => crate::diagram::EMPTY.to_string(),
         }
     }
 
@@ -206,11 +220,18 @@ mod tests {
         assert_eq!(FileType::from_path(Path::new("x.markdown")), FileType::Md);
         assert_eq!(FileType::from_path(Path::new("noext")), FileType::Txt);
         assert_eq!(FileType::from_extension("rs"), FileType::Txt);
+        assert_eq!(
+            FileType::from_path(Path::new("a/flow.tbdg")),
+            FileType::Tbdg
+        );
+        assert!(FileType::Tbdg.is_diagram() && !FileType::Typ.is_diagram());
+        // 図にはテキスト用のペインもアクションバーも無い
+        assert!(!FileType::Tbdg.has_preview() && !FileType::Tbdg.has_outline());
     }
 
     #[test]
     fn wildcard_puts_own_type_first() {
         assert!(FileType::Md.save_wildcard().starts_with("*.md|*.md|"));
-        assert!(FileType::open_wildcard().starts_with("*.txt;*.md;*.typ|"));
+        assert!(FileType::open_wildcard().starts_with("*.txt;*.md;*.typ;*.tbdg|"));
     }
 }

@@ -157,3 +157,9 @@ body.export .markdown-body { padding-bottom: 40px; }
   h1, h2, h3, h4, h5, h6 { break-after: avoid; }
   pre, table, img, blockquote { break-inside: avoid; }
 }
+
+/* Mermaid の図 (```mermaid のコードブロックを preview.js が描いたもの) */
+.tb-mermaid { text-align: center; margin: 0.8em 0; overflow-x: auto; }
+.tb-mermaid svg { max-width: 100%; height: auto; }
+/* 書き間違いで描けなかったもの (理由はマウスを重ねると出る) */
+pre.tb-mermaid-error { border-color: #d33; }

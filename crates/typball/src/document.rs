@@ -90,6 +90,15 @@ pub fn load(path: &Path, options: DecodeOptions) -> io::Result<Loaded> {
     // 更新時刻は読む前に取る: 読んでいる間に書き換えられても次の確認で気付ける
     let stamp = Stamp::of(path);
     let bytes = fs::read(path)?;
+    // 図 (.tbdg) の中身は SVG で、書くときは必ず UTF-8。推定に任せず UTF-8 として読む
+    let options = if FileType::from_path(path).is_diagram() {
+        DecodeOptions {
+            forced: Some(Encoding::UTF8),
+            ..options
+        }
+    } else {
+        options
+    };
     let decoded = fileio::decode(bytes, options);
     let doc = Document {
         path: Some(path.to_path_buf()),
@@ -97,7 +106,10 @@ pub fn load(path: &Path, options: DecodeOptions) -> io::Result<Loaded> {
         untitled: 0,
         stamp,
         encoding: decoded.encoding,
-        forced_encoding: options.forced,
+        // 図は UTF-8 と決まっているだけで、利用者が文字コードを指定したわけではない
+        forced_encoding: options
+            .forced
+            .filter(|_| !FileType::from_path(path).is_diagram()),
         lossy: decoded.lossy,
     };
     Ok(Loaded {
@@ -123,7 +135,12 @@ pub fn decode_options(settings: &settings::Settings) -> DecodeOptions {
 
 impl Document {
     pub fn untitled(filetype: FileType, number: usize) -> Self {
-        let encoding = Encoding::parse(&settings::get().files.default_encoding).unwrap_or_default();
+        // 図 (.tbdg) は設定に関係なく UTF-8 (SVG として Typst が読む)
+        let encoding = if filetype.is_diagram() {
+            Encoding::UTF8
+        } else {
+            Encoding::parse(&settings::get().files.default_encoding).unwrap_or_default()
+        };
         Self {
             path: None,
             filetype,

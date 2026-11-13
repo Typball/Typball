@@ -31,7 +31,7 @@ pub fn outline(text: &str, filetype: FileType) -> Vec<OutlineItem> {
     match filetype {
         FileType::Typ => typst_outline(text),
         FileType::Md => markdown_outline(text),
-        FileType::Txt => Vec::new(),
+        FileType::Txt | FileType::Tbdg => Vec::new(),
     }
 }
 

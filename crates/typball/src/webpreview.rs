@@ -37,12 +37,15 @@ use crate::settings::{self, MarkdownMode};
 use crate::site::{self, Project, Server};
 
 /// 独自スキーム名。wx はこれを `https://<スキーム>.wxsite/` の仮想ホストにする
-const SCHEME: &str = "typball";
+pub(crate) const SCHEME: &str = "typball";
 const HOST: &str = "typball.wxsite";
 /// ページ → Rust のメッセージ用オブジェクト名 (`window.typball_host.postMessage`)
 const MESSAGE_HANDLER: &str = "typball_host";
 const CSS: &str = include_str!("../assets/preview.css");
 const JS: &str = include_str!("../assets/preview.js");
+/// Mermaid 12.3.0 (MIT)。1 ファイル版をそのまま置いている。Markdown のプレビューは Mermaid のコードブロックが
+/// あるときだけ読み込み、Typst の文書の中の Mermaid は mermaid.rs が見えない WebView で描くのに使う
+const MERMAID: &str = include_str!("../assets/mermaid/mermaid.min.js");
 /// サーバーの起動待ちの間隔と上限 (250 ms × 240 = 60 秒)
 const READY_POLL_MS: i32 = 250;
 const READY_MAX_TICKS: u32 = 240;
@@ -107,7 +110,7 @@ pub fn available() -> bool {
     WebView::is_backend_available(backend())
 }
 
-fn backend() -> WebViewBackend {
+pub(crate) fn backend() -> WebViewBackend {
     if cfg!(windows) {
         WebViewBackend::Edge
     } else {
@@ -536,7 +539,7 @@ pub fn run_script_async(wv: &WebView, js: &str) {
     unsafe { ffi::wxd_WebView_RunScriptAsync(ptr, script.as_ptr()) }
 }
 
-fn set_clipboard_text(text: &str) {
+pub(crate) fn set_clipboard_text(text: &str) {
     let clipboard = Clipboard::get();
     if clipboard.open() {
         clipboard.set_text(text);
@@ -644,10 +647,24 @@ impl PdfExport {
         let done = Rc::new(RefCell::new(Some(done)));
         let url = format!("https://{HOST}/{id}/index.html");
         let started = Cell::new(false);
+        // 印刷は、ページが「描き終えた」("rendered") と知らせてきてから: Mermaid の図は読み込みの後で描かれる。
+        // 知らせが来ないとき (ページのスクリプトが動かなかったとき) に待ち続けないよう、読み込みの 10 秒後にも
+        // 同じ知らせを出させる
+        webview.add_script_message_handler(MESSAGE_HANDLER);
         webview.on_loaded({
             let url = url.clone();
             move |event| {
-                if started.get() || !event.get_url().unwrap_or_default().starts_with(&url) {
+                if event.get_url().unwrap_or_default().starts_with(&url) {
+                    run_script_async(
+                        &webview,
+                        "setTimeout(function(){try{window.typball_host.postMessage('rendered')}catch(e){}},10000);",
+                    );
+                }
+            }
+        });
+        webview.on_script_message_received({
+            move |event| {
+                if started.get() || event.get_string().as_deref() != Some("rendered") {
                     return;
                 }
                 started.set(true);
@@ -760,7 +777,7 @@ fn serve(uri: &str) -> Option<WebViewHandlerResponse> {
 }
 
 /// URL からパス部分 (`/7/img/a.png`) を取り出す (クエリとフラグメントは捨てる)
-fn request_path(uri: &str) -> Option<&str> {
+pub(crate) fn request_path(uri: &str) -> Option<&str> {
     let path = if let Some(i) = uri.find(HOST) {
         &uri[i + HOST.len()..]
     } else if let Some(rest) = uri.strip_prefix(&format!("{SCHEME}:")) {
@@ -771,11 +788,12 @@ fn request_path(uri: &str) -> Option<&str> {
     Some(path.split(['?', '#']).next().unwrap_or(path))
 }
 
-fn embedded_asset(name: &str) -> Option<WebViewHandlerResponse> {
+pub(crate) fn embedded_asset(name: &str) -> Option<WebViewHandlerResponse> {
     let fonts = typball_core::embedded_font_data();
     let (data, mime): (&[u8], &str) = match name {
         "preview.css" => (CSS.as_bytes(), "text/css"),
         "preview.js" => (JS.as_bytes(), "application/javascript"),
+        "mermaid.min.js" => (MERMAID.as_bytes(), "application/javascript"),
         // 同梱の Noto Sans JP (インストールされていなくても @font-face で使えるように)
         "NotoSansJP-Regular.otf" => (fonts.first()?, "font/otf"),
         "NotoSansJP-Bold.otf" => (fonts.get(1)?, "font/otf"),
@@ -824,9 +842,9 @@ fn is_plain_relative(path: &Path) -> bool {
 
 /// 絶対パスで読めるのは画像・フォント・メディアなど表示用のファイルだけ
 fn is_safe_extension(path: &Path) -> bool {
-    const ALLOWED: [&str; 22] = [
-        "png", "jpg", "jpeg", "gif", "svg", "webp", "avif", "bmp", "ico", "apng", "css", "woff",
-        "woff2", "ttf", "otf", "pdf", "mp4", "webm", "mp3", "ogg", "wav", "txt",
+    const ALLOWED: [&str; 23] = [
+        "png", "jpg", "jpeg", "gif", "svg", "tbdg", "webp", "avif", "bmp", "ico", "apng", "css",
+        "woff", "woff2", "ttf", "otf", "pdf", "mp4", "webm", "mp3", "ogg", "wav", "txt",
     ];
     path.extension()
         .and_then(|e| e.to_str())
@@ -844,7 +862,8 @@ fn mime_for(path: &Path) -> &'static str {
         Some("png") => "image/png",
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("gif") => "image/gif",
-        Some("svg") => "image/svg+xml",
+        // 図 (.tbdg) の中身は SVG
+        Some("svg" | "tbdg") => "image/svg+xml",
         Some("webp") => "image/webp",
         Some("avif") => "image/avif",
         Some("bmp") => "image/bmp",

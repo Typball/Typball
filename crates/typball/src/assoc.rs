@@ -1,6 +1,6 @@
 //! ファイルの関連付け (設定 → 関連付け)
 //!
-//! 「.txt / .md / .typ をダブルクリックしたら Typball で開く」を OS に登録・解除する。
+//! 「.txt / .md / .typ / .tbdg をダブルクリックしたら Typball で開く」を OS に登録・解除する。
 //! 仕組みは OS ごとに違うので、中身は OS ごとのモジュールに分ける:
 //!
 //! - Windows (`windows.rs`): レジストリの `HKCU\Software\Classes`。インストーラー (installer/typball.iss) が
@@ -38,15 +38,23 @@ pub enum Kind {
     Txt,
     Md,
     Typ,
+    /// 図 (Typball の図エディタの形式。中身は SVG)
+    Tbdg,
 }
 
 impl Kind {
+    /// 設定画面に並べる順。形式を足すときは、ここと下の `match`、各 OS のモジュール、インストーラー
+    /// (installer/typball.iss)、macOS の書類の種類 (installer/macos/Info.plist)、書類のアイコン
+    /// (design/icons/gen_icons.py と assets/icons/typball.rc) に足す
+    pub const ALL: [Kind; 4] = [Self::Txt, Self::Md, Self::Typ, Self::Tbdg];
+
     /// 拡張子 (ドット無し)
     pub fn ext(self) -> &'static str {
         match self {
             Self::Txt => "txt",
             Self::Md => "md",
             Self::Typ => "typ",
+            Self::Tbdg => "tbdg",
         }
     }
 
@@ -64,6 +72,7 @@ impl Kind {
             Self::Txt => "Text Document",
             Self::Md => "Markdown Document",
             Self::Typ => "Typst Document",
+            Self::Tbdg => "Typball Diagram",
         }
     }
 
@@ -74,6 +83,7 @@ impl Kind {
             Self::Txt => "text/plain",
             Self::Md => "text/markdown",
             Self::Typ => "text/x-typst",
+            Self::Tbdg => "application/x-typball-diagram",
         }
     }
 }
@@ -177,7 +187,7 @@ pub const UNREGISTER_ARG: &str = "--unregister-associations";
 /// 今動いているこの Typball に向いている関連付けをすべて解除する。別の場所の Typball の登録には触らない
 /// (開発版をアンインストールしても、インストール版の関連付けは残る)
 pub fn unregister_own() {
-    for kind in [Kind::Txt, Kind::Md, Kind::Typ] {
+    for kind in Kind::ALL {
         let status = status(kind);
         if status.registered == Registered::This && status.removable {
             if let Err(e) = unregister(kind) {

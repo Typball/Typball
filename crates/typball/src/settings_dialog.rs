@@ -30,7 +30,7 @@ type PageBuilder = fn(&Panel, &Settings, &mut Readers, &Dialog);
 
 /// ページの並び: (タイトルのキー, 中身を作る関数, 直前の親ページの子か)。
 /// 子ページは Treebook で親の下にぶら下がる (ファイル → 形式ごとの設定)
-const PAGES: [(&str, PageBuilder, bool); 10] = [
+const PAGES: [(&str, PageBuilder, bool); 11] = [
     ("settings.general.title", page_general, false),
     ("settings.display.title", page_display, false),
     ("settings.editor.title", page_editor, false),
@@ -38,6 +38,7 @@ const PAGES: [(&str, PageBuilder, bool); 10] = [
     ("filetype.txt", page_filetype_txt, true),
     ("filetype.md", page_filetype_md, true),
     ("filetype.typ", page_filetype_typ, true),
+    ("filetype.tbdg", page_filetype_tbdg, true),
     ("settings.preview.title", page_preview, false),
     ("settings.assoc.title", page_assoc, false),
     ("settings.update.title", page_update, false),
@@ -56,6 +57,25 @@ pub struct Outcome {
     pub check_update: bool,
 }
 
+thread_local! {
+    /// 開いている設定ダイアログの読み戻し処理。ページの中から「今ダイアログで選んである値」を知るのに使う
+    /// (種別ごとの上書きのダイアログが、まだ OK していないエディタのページの値を既定値として見せる)
+    static LIVE_READERS: RefCell<Option<Rc<RefCell<Readers>>>> = const { RefCell::new(None) };
+}
+
+/// 設定ダイアログで今選んである値 (まだ OK していない変更も入れたもの)
+fn pending_settings(current: &Settings) -> Settings {
+    let mut s = current.clone();
+    if let Some(readers) = LIVE_READERS.with(|live| live.borrow().clone()) {
+        if let Ok(readers) = readers.try_borrow() {
+            for read in readers.iter() {
+                read(&mut s);
+            }
+        }
+    }
+    s
+}
+
 /// ダイアログを開き、OK なら新しい設定を返す (キャンセルなら None)
 pub fn show(parent: &Frame, current: &Settings) -> Option<Outcome> {
     let dialog = Dialog::builder(parent, &tr("settings.title"))
@@ -66,6 +86,7 @@ pub fn show(parent: &Frame, current: &Settings) -> Option<Outcome> {
 
     let book = Treebook::builder(&dialog).build();
     let readers: Rc<RefCell<Readers>> = Rc::new(RefCell::new(Vec::new()));
+    LIVE_READERS.with(|live| *live.borrow_mut() = Some(readers.clone()));
 
     // ページは空のパネルだけ先に登録し、中身は最初に表示されるときに作る。
     // 一度も表示されなかったページの設定はそのまま残る (読み戻し処理が無い)
@@ -176,6 +197,7 @@ pub fn show(parent: &Frame, current: &Settings) -> Option<Outcome> {
     } else {
         None
     };
+    LIVE_READERS.with(|live| *live.borrow_mut() = None);
     dialog.destroy();
     out
 }
@@ -221,7 +243,7 @@ fn font_size_row(
     font_size: SpinCtrl,
     face: String,
     size: i32,
-) -> BoxSizer {
+) -> (BoxSizer, Button) {
     let reset = Button::builder(panel)
         .with_label(&tr("settings.editor.font_reset"))
         .build();
@@ -237,7 +259,7 @@ fn font_size_row(
         SizerFlag::AlignCenterVertical | SizerFlag::Left,
         panel.from_dip_int(GAP),
     );
-    row
+    (row, reset)
 }
 
 /// 選択肢を入れた Choice を作る。項目は描画を止めてから入れる (wx は項目を 1 つ入れるたびに
@@ -482,7 +504,59 @@ fn bottom_width_key(value: BottomWidth) -> &'static str {
 
 fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
     let px = |v: i32| panel.from_dip_int(v);
+    let (grid, form) = editor_form(panel, &current.editor, None);
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+    sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
+    panel.set_sizer(sizer, true);
+    readers.push(Box::new(move |s| (form.read)(&mut s.editor)));
+}
+
+/// エディタ設定の欄一式から値を読む処理
+struct EditorForm {
+    /// 欄の値を `Editor` に入れる (全項目)
+    read: Box<dyn Fn(&mut settings::Editor)>,
+    /// 「上書きする」にチェックのある行だけを入れた上書き (上書きのダイアログのとき)
+    overrides: Box<dyn Fn() -> settings::EditorOverride>,
+    /// 行の見出しのチェックボックスと、その行の欄の有効・無効を切り替える処理 (上書きのダイアログのとき)
+    rows: Vec<(CheckBox, Rc<dyn Fn(bool)>)>,
+}
+
+/// エディタ設定の欄を `panel` の中に作る。「設定 → エディタ」のページと、種別ごとの上書きのダイアログで
+/// 同じ欄を使う (項目を足すときは、ここと `settings::EditorOverride` に足す)。
+///
+/// - `values`: 欄に最初に入れる値
+/// - `over`: 上書きのダイアログなら今の上書き。行の見出しが「上書きする」チェックボックスになり、
+///   チェックの無い行の欄は選べない (既定値を見せるだけ)。ページなら None で、見出しはただの文字
+fn editor_form(
+    panel: &Panel,
+    values: &settings::Editor,
+    over: Option<&settings::EditorOverride>,
+) -> (FlexGridSizer, EditorForm) {
+    let px = |v: i32| panel.from_dip_int(v);
     let grid = form_grid(panel);
+    let rows: Rc<RefCell<Vec<(CheckBox, Rc<dyn Fn(bool)>)>>> = Rc::new(RefCell::new(Vec::new()));
+    // 行の見出しをグリッドに足す。上書きのダイアログでは、チェックボックスにして `enable` につなぐ
+    let head = |key: &str, on: bool, enable: Rc<dyn Fn(bool)>| -> Option<CheckBox> {
+        if over.is_none() {
+            grid.add(&label(panel, key), 0, LABEL_FLAGS, 0);
+            return None;
+        }
+        let check = CheckBox::builder(panel)
+            .with_label(&tr(key))
+            .with_value(on)
+            .build();
+        check.set_tooltip(&tr("settings.override.check_tip"));
+        grid.add(&check, 0, LABEL_FLAGS, 0);
+        enable(on);
+        check.on_toggled({
+            let (check, enable) = (check, enable.clone());
+            move |_| enable(check.is_checked())
+        });
+        rows.borrow_mut().push((check, enable));
+        Some(check)
+    };
+    let none = settings::EditorOverride::default();
+    let over_now = over.unwrap_or(&none);
 
     // 同梱の UDEV Gothic (既定) を先頭に、続いて等幅フォント、残りを後に (どちらも名前順)。手入力もできる
     let embedded = crate::fonts::EDITOR_FONT_FAMILY;
@@ -504,7 +578,7 @@ fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog
     // 一覧は最初にドロップダウンを開いたときに入れる (数百のフォント名を入れるのに数百 ms
     // かかり、ダイアログが開くのが遅くなる)。まとめて追加し、描画も止めておく
     let font_face = ComboBox::builder(panel)
-        .with_value(&current.editor.font_face)
+        .with_value(&values.font_face)
         .build();
     let filled = std::rc::Rc::new(std::cell::Cell::new(false));
     font_face.on_dropdown({
@@ -519,60 +593,57 @@ fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog
             font_face.thaw();
         }
     });
-    grid.add(
-        &label(panel, "settings.editor.font_face"),
-        0,
-        LABEL_FLAGS,
-        0,
-    );
-    grid.add(&font_face, 0, SizerFlag::Expand, 0);
-
     let font_size = SpinCtrl::builder(panel)
         .with_range(6, 72)
-        .with_initial_value(current.editor.font_size)
+        .with_initial_value(values.font_size)
         .build();
+    let defaults = settings::Editor::default();
+    let (font_row, font_reset) = font_size_row(
+        panel,
+        font_face,
+        font_size,
+        defaults.font_face,
+        defaults.font_size,
+    );
+    // フォントとサイズは 1 組 (見出しはフォントの行に付ける)
+    let font_check = head(
+        "settings.editor.font_face",
+        over_now.font_face.is_some() || over_now.font_size.is_some(),
+        Rc::new(move |on| {
+            font_face.enable(on);
+            font_size.enable(on);
+            font_reset.enable(on);
+        }),
+    );
+    grid.add(&font_face, 0, SizerFlag::Expand, 0);
     grid.add(
         &label(panel, "settings.editor.font_size"),
         0,
         LABEL_FLAGS,
         0,
     );
-    let defaults = settings::Editor::default();
-    grid.add_sizer(
-        &font_size_row(
-            panel,
-            font_face,
-            font_size,
-            defaults.font_face,
-            defaults.font_size,
-        ),
-        0,
-        SizerFlag::AlignLeft,
-        0,
-    );
+    grid.add_sizer(&font_row, 0, SizerFlag::AlignLeft, 0);
 
     // 行間: 1 行の高さに足す px
     let line_spacing = SpinCtrl::builder(panel)
         .with_range(0, 40)
-        .with_initial_value(current.editor.line_spacing)
+        .with_initial_value(values.line_spacing)
         .build();
-    grid.add(
-        &label(panel, "settings.editor.line_spacing"),
-        0,
-        LABEL_FLAGS,
-        0,
+    let line_spacing_check = head(
+        "settings.editor.line_spacing",
+        over_now.line_spacing.is_some(),
+        Rc::new(move |on| line_spacing.enable(on)),
     );
     grid.add(&line_spacing, 0, SizerFlag::AlignLeft, 0);
 
     let tab_width = SpinCtrl::builder(panel)
         .with_range(1, 16)
-        .with_initial_value(current.editor.tab_width)
+        .with_initial_value(values.tab_width)
         .build();
-    grid.add(
-        &label(panel, "settings.editor.tab_width"),
-        0,
-        LABEL_FLAGS,
-        0,
+    let tab_width_check = head(
+        "settings.editor.tab_width",
+        over_now.tab_width.is_some(),
+        Rc::new(move |on| tab_width.enable(on)),
     );
     grid.add(&tab_width, 0, SizerFlag::AlignLeft, 0);
 
@@ -584,8 +655,12 @@ fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog
             tr("settings.editor.tab_key_tab"),
         ],
     );
-    tab_key.set_selection(current.editor.use_tabs as u32);
-    grid.add(&label(panel, "settings.editor.tab_key"), 0, LABEL_FLAGS, 0);
+    tab_key.set_selection(values.use_tabs as u32);
+    let tab_key_check = head(
+        "settings.editor.tab_key",
+        over_now.use_tabs.is_some(),
+        Rc::new(move |on| tab_key.enable(on)),
+    );
     grid.add(&tab_key, 0, SizerFlag::AlignLeft, 0);
 
     // Backspace でスペースを消すときの動作: Backspace::ALL の並び順
@@ -607,14 +682,13 @@ fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog
     );
     let selected = Backspace::ALL
         .iter()
-        .position(|mode| *mode == current.editor.backspace)
+        .position(|mode| *mode == values.backspace)
         .unwrap_or(0);
     backspace.set_selection(selected as u32);
-    grid.add(
-        &label(panel, "settings.editor.backspace"),
-        0,
-        LABEL_FLAGS,
-        0,
+    let backspace_check = head(
+        "settings.editor.backspace",
+        over_now.backspace.is_some(),
+        Rc::new(move |on| backspace.enable(on)),
     );
     grid.add(&backspace, 0, SizerFlag::AlignLeft, 0);
 
@@ -622,21 +696,24 @@ fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog
     let wrap = choice_with(panel, Wrap::ALL.iter().map(|v| tr(wrap_key(*v))).collect());
     let selected = Wrap::ALL
         .iter()
-        .position(|v| *v == current.editor.wrap)
+        .position(|v| *v == values.wrap)
         .unwrap_or(1);
     wrap.set_selection(selected as u32);
-    grid.add(&label(panel, "settings.editor.wrap"), 0, LABEL_FLAGS, 0);
+    let wrap_check = head(
+        "settings.editor.wrap",
+        over_now.wrap.is_some(),
+        Rc::new(move |on| wrap.enable(on)),
+    );
     grid.add(&wrap, 0, SizerFlag::AlignLeft, 0);
 
     let wrap_column = SpinCtrl::builder(panel)
         .with_range(10, 1000)
-        .with_initial_value(current.editor.wrap_column)
+        .with_initial_value(values.wrap_column)
         .build();
-    grid.add(
-        &label(panel, "settings.editor.wrap_column_width"),
-        0,
-        LABEL_FLAGS,
-        0,
+    let wrap_column_check = head(
+        "settings.editor.wrap_column_width",
+        over_now.wrap_column.is_some(),
+        Rc::new(move |on| wrap_column.enable(on)),
     );
     grid.add(&wrap_column, 0, SizerFlag::AlignLeft, 0);
 
@@ -649,16 +726,20 @@ fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog
         })
     }));
     let ruler = choice_with(panel, ruler_labels);
-    let selected = if current.editor.show_ruler {
+    let selected = if values.show_ruler {
         1 + RulerTabs::ALL
             .iter()
-            .position(|tabs| *tabs == current.editor.ruler_tabs)
+            .position(|tabs| *tabs == values.ruler_tabs)
             .unwrap_or(0)
     } else {
         0
     };
     ruler.set_selection(selected as u32);
-    grid.add(&label(panel, "settings.editor.ruler"), 0, LABEL_FLAGS, 0);
+    let ruler_check = head(
+        "settings.editor.ruler",
+        over_now.show_ruler.is_some() || over_now.ruler_tabs.is_some(),
+        Rc::new(move |on| ruler.enable(on)),
+    );
     grid.add(&ruler, 0, SizerFlag::AlignLeft, 0);
 
     // 行番号の位置: LineNumbers::ALL の並び順で選択肢を作る
@@ -671,14 +752,13 @@ fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog
     );
     let selected = LineNumbers::ALL
         .iter()
-        .position(|v| *v == current.editor.line_numbers)
+        .position(|v| *v == values.line_numbers)
         .unwrap_or(1);
     line_numbers.set_selection(selected as u32);
-    grid.add(
-        &label(panel, "settings.editor.line_numbers"),
-        0,
-        LABEL_FLAGS,
-        0,
+    let line_numbers_check = head(
+        "settings.editor.line_numbers",
+        over_now.line_numbers.is_some(),
+        Rc::new(move |on| line_numbers.enable(on)),
     );
     grid.add(&line_numbers, 0, SizerFlag::AlignLeft, 0);
 
@@ -689,42 +769,40 @@ fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog
         panel,
         CHANGE_HIGHLIGHT.iter().map(|(key, _)| tr(key)).collect(),
     );
-    let selected = if current.editor.highlight_changes {
+    let selected = if values.highlight_changes {
         CHANGE_HIGHLIGHT
             .iter()
-            .position(|(_, v)| *v == Some(current.editor.saved_changes))
+            .position(|(_, v)| *v == Some(values.saved_changes))
             .unwrap_or(1)
     } else {
         0
     };
     change_highlight.set_selection(selected as u32);
-    grid.add(
-        &label(panel, "settings.editor.change_highlight"),
-        0,
-        LABEL_FLAGS,
-        0,
+    let change_check = head(
+        "settings.editor.change_highlight",
+        over_now.highlight_changes.is_some() || over_now.saved_changes.is_some(),
+        Rc::new(move |on| change_highlight.enable(on)),
     );
     grid.add(&change_highlight, 0, SizerFlag::AlignLeft, 0);
 
     // 不可視文字の記号 (表示 > 記号を表示 と同じ)。1 行に並べる (縦に積むとページに収まらない)
-    let mark_boxes: Vec<CheckBox> = [
-        ("settings.editor.show_eol", current.editor.show_eol),
-        ("settings.editor.show_eof", current.editor.show_eof),
-        (
-            "settings.editor.show_whitespace",
-            current.editor.show_whitespace,
-        ),
-    ]
-    .into_iter()
-    .map(|(key, value)| {
-        CheckBox::builder(panel)
-            .with_label(&tr(key))
-            .with_value(value)
-            .build()
-    })
-    .collect();
+    let mark_boxes: Rc<Vec<CheckBox>> = Rc::new(
+        [
+            ("settings.editor.show_eol", values.show_eol),
+            ("settings.editor.show_eof", values.show_eof),
+            ("settings.editor.show_whitespace", values.show_whitespace),
+        ]
+        .into_iter()
+        .map(|(key, value)| {
+            CheckBox::builder(panel)
+                .with_label(&tr(key))
+                .with_value(value)
+                .build()
+        })
+        .collect(),
+    );
     let marks_row = BoxSizer::builder(Orientation::Horizontal).build();
-    for check in &mark_boxes {
+    for check in mark_boxes.iter() {
         marks_row.add(
             check,
             0,
@@ -732,57 +810,221 @@ fn page_editor(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog
             px(GAP * 2),
         );
     }
-    grid.add(
-        &label(panel, "settings.editor.show_marks"),
-        0,
-        LABEL_FLAGS,
-        0,
+    let marks_check = head(
+        "settings.editor.show_marks",
+        over_now.show_eol.is_some()
+            || over_now.show_eof.is_some()
+            || over_now.show_whitespace.is_some(),
+        Rc::new({
+            let mark_boxes = mark_boxes.clone();
+            move |on| mark_boxes.iter().for_each(|check| check.enable(on))
+        }),
     );
     grid.add_sizer(&marks_row, 0, SizerFlag::AlignLeft, 0);
 
-    let sizer = BoxSizer::builder(Orientation::Vertical).build();
-    sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
-    panel.set_sizer(sizer, true);
-
-    readers.push(Box::new(move |s| {
-        s.editor.font_face = font_face.get_value().trim().to_string();
-        s.editor.font_size = font_size.value();
-        s.editor.tab_width = tab_width.value();
-        s.editor.line_spacing = line_spacing.value().clamp(0, 40);
-        s.editor.use_tabs = tab_key.get_selection() == Some(1);
-        s.editor.backspace = backspace
+    let read: Rc<dyn Fn(&mut settings::Editor)> = Rc::new(move |e| {
+        e.font_face = font_face.get_value().trim().to_string();
+        e.font_size = font_size.value();
+        e.tab_width = tab_width.value();
+        e.line_spacing = line_spacing.value().clamp(0, 40);
+        e.use_tabs = tab_key.get_selection() == Some(1);
+        e.backspace = backspace
             .get_selection()
             .and_then(|i| Backspace::ALL.get(i as usize).copied())
             .unwrap_or_default();
-        s.editor.wrap = wrap
+        e.wrap = wrap
             .get_selection()
             .and_then(|i| Wrap::ALL.get(i as usize).copied())
             .unwrap_or_default();
-        s.editor.wrap_column = wrap_column.value();
-        s.editor.line_numbers = line_numbers
+        e.wrap_column = wrap_column.value();
+        e.line_numbers = line_numbers
             .get_selection()
             .and_then(|i| LineNumbers::ALL.get(i as usize).copied())
             .unwrap_or_default();
         let idx = change_highlight.get_selection().unwrap_or(1) as usize;
         match CHANGE_HIGHLIGHT.get(idx).and_then(|(_, v)| *v) {
             Some(saved) => {
-                s.editor.highlight_changes = true;
-                s.editor.saved_changes = saved;
+                e.highlight_changes = true;
+                e.saved_changes = saved;
             }
-            None => s.editor.highlight_changes = false,
+            None => e.highlight_changes = false,
         }
         // 「表示しない」を選んでも、タブ位置の示し方は残す (表示メニューで出し直したときに戻る)
         match ruler.get_selection().unwrap_or(0) as usize {
-            0 => s.editor.show_ruler = false,
+            0 => e.show_ruler = false,
             i => {
-                s.editor.show_ruler = true;
-                s.editor.ruler_tabs = RulerTabs::ALL.get(i - 1).copied().unwrap_or_default();
+                e.show_ruler = true;
+                e.ruler_tabs = RulerTabs::ALL.get(i - 1).copied().unwrap_or_default();
             }
         }
-        s.editor.show_eol = mark_boxes[0].is_checked();
-        s.editor.show_eof = mark_boxes[1].is_checked();
-        s.editor.show_whitespace = mark_boxes[2].is_checked();
-    }));
+        e.show_eol = mark_boxes[0].is_checked();
+        e.show_eof = mark_boxes[1].is_checked();
+        e.show_whitespace = mark_boxes[2].is_checked();
+    });
+
+    // チェックのある行の値だけを上書きに入れる (1 行に 2 つ以上の項目がある行は、その全部)
+    let overrides = {
+        let (read, base) = (read.clone(), values.clone());
+        let on = |check: &Option<CheckBox>| check.as_ref().is_some_and(|c| c.is_checked());
+        move || {
+            let mut e = base.clone();
+            read(&mut e);
+            let font = on(&font_check);
+            let ruler = on(&ruler_check);
+            let change = on(&change_check);
+            let marks = on(&marks_check);
+            settings::EditorOverride {
+                font_face: font.then(|| e.font_face.clone()),
+                font_size: font.then_some(e.font_size),
+                line_spacing: on(&line_spacing_check).then_some(e.line_spacing),
+                tab_width: on(&tab_width_check).then_some(e.tab_width),
+                use_tabs: on(&tab_key_check).then_some(e.use_tabs),
+                backspace: on(&backspace_check).then_some(e.backspace),
+                wrap: on(&wrap_check).then_some(e.wrap),
+                wrap_column: on(&wrap_column_check).then_some(e.wrap_column),
+                line_numbers: on(&line_numbers_check).then_some(e.line_numbers),
+                highlight_changes: change.then_some(e.highlight_changes),
+                saved_changes: change.then_some(e.saved_changes),
+                show_ruler: ruler.then_some(e.show_ruler),
+                ruler_tabs: ruler.then_some(e.ruler_tabs),
+                show_eol: marks.then_some(e.show_eol),
+                show_eof: marks.then_some(e.show_eof),
+                show_whitespace: marks.then_some(e.show_whitespace),
+            }
+        }
+    };
+    let rows = rows.borrow().clone();
+    let form = EditorForm {
+        read: Box::new(move |e| read(e)),
+        overrides: Box::new(overrides),
+        rows,
+    };
+    (grid, form)
+}
+
+/// 上書きしている項目の名前を並べた文 (種別のページの、ボタンの横に出す)
+fn override_summary(over: &settings::EditorOverride) -> String {
+    let items = [
+        (
+            over.font_face.is_some() || over.font_size.is_some(),
+            "settings.editor.font_face",
+        ),
+        (over.line_spacing.is_some(), "settings.editor.line_spacing"),
+        (over.tab_width.is_some(), "settings.editor.tab_width"),
+        (over.use_tabs.is_some(), "settings.editor.tab_key"),
+        (over.backspace.is_some(), "settings.editor.backspace"),
+        (over.wrap.is_some(), "settings.editor.wrap"),
+        (
+            over.wrap_column.is_some(),
+            "settings.editor.wrap_column_width",
+        ),
+        (
+            over.show_ruler.is_some() || over.ruler_tabs.is_some(),
+            "settings.editor.ruler",
+        ),
+        (over.line_numbers.is_some(), "settings.editor.line_numbers"),
+        (
+            over.highlight_changes.is_some() || over.saved_changes.is_some(),
+            "settings.editor.change_highlight",
+        ),
+        (
+            over.show_eol.is_some() || over.show_eof.is_some() || over.show_whitespace.is_some(),
+            "settings.editor.show_marks",
+        ),
+    ];
+    // 見出しの文言は「タブ幅:」のようにコロンで終わるので、外して並べる
+    let names: Vec<String> = items
+        .iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, key)| {
+            let text = tr(key);
+            let text = text.trim_end_matches([':', '：']).trim();
+            // 「行間 (行の高さに足す px)」のような補足は省く
+            text.split(" (").next().unwrap_or(text).to_string()
+        })
+        .collect();
+    if names.is_empty() {
+        tr("settings.override.none")
+    } else {
+        tr_args("settings.override.some", &[("items", &names.join("、"))])
+    }
+}
+
+/// 種別ごとのエディタ設定の上書きを編集するダイアログ。OK なら新しい上書きを返す。
+/// `defaults` は「設定 → エディタ」の今の値 (上書きしない項目に見せる既定値)
+fn edit_editor_override(
+    parent: &Dialog,
+    ft: FileType,
+    defaults: &settings::Editor,
+    current: &settings::EditorOverride,
+) -> Option<settings::EditorOverride> {
+    let dialog = Dialog::builder(
+        parent,
+        &tr_args("settings.override.title", &[("name", &tr(ft.name_key()))]),
+    )
+    .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
+    .build();
+    let px = |v: i32| dialog.from_dip_int(v);
+    let panel = Panel::builder(&dialog).build();
+
+    let intro = StaticText::builder(&panel)
+        .with_label(&tr_args(
+            "settings.override.intro",
+            &[("name", &tr(ft.name_key()))],
+        ))
+        .build();
+    // 欄には、今この種別で有効な値を入れる (上書きしていない項目は既定値)
+    let mut values = defaults.clone();
+    current.apply(&mut values);
+    let (grid, form) = editor_form(&panel, &values, Some(current));
+    let clear = Button::builder(&panel)
+        .with_label(&tr("settings.override.clear"))
+        .build();
+    clear.on_click({
+        let rows = form.rows.clone();
+        move |_| {
+            for (check, enable) in &rows {
+                check.set_value(false);
+                enable(false);
+            }
+        }
+    });
+
+    let inner = BoxSizer::builder(Orientation::Vertical).build();
+    inner.add(&intro, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
+    inner.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
+    inner.add(
+        &clear,
+        0,
+        SizerFlag::AlignLeft | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
+        px(GAP),
+    );
+    panel.set_sizer(inner, true);
+    intro.wrap(px(520));
+
+    let ok = Button::builder(&dialog)
+        .with_id(ID_OK)
+        .with_label(&tr("settings.ok"))
+        .build();
+    let cancel = Button::builder(&dialog)
+        .with_id(ID_CANCEL)
+        .with_label(&tr("settings.cancel"))
+        .build();
+    let buttons = StdDialogButtonSizerBuilder::new().build();
+    buttons.add_button(&ok);
+    buttons.add_button(&cancel);
+    buttons.realize();
+    let root = BoxSizer::builder(Orientation::Vertical).build();
+    root.add(&panel, 1, SizerFlag::Expand, 0);
+    root.add_sizer(&buttons, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
+    dialog.set_sizer_and_fit(root, true);
+    dialog.centre();
+    dialog.layout();
+
+    let result = dialog.show_modal();
+    let out = (result == ID_OK).then(|| (form.overrides)());
+    dialog.destroy();
+    out
 }
 
 fn wrap_key(value: Wrap) -> &'static str {
@@ -1017,23 +1259,97 @@ fn page_files(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog:
 // ファイル → テキスト / Markdown / Typst: 形式ごとのペイン・開き方・雛形
 // ---------------------------------------------------------------------------
 
-fn page_filetype_txt(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
-    page_filetype(panel, current, readers, FileType::Txt);
+fn page_filetype_txt(panel: &Panel, current: &Settings, readers: &mut Readers, dialog: &Dialog) {
+    page_filetype(panel, current, readers, dialog, FileType::Txt);
 }
 
-fn page_filetype_md(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
-    page_filetype(panel, current, readers, FileType::Md);
+fn page_filetype_md(panel: &Panel, current: &Settings, readers: &mut Readers, dialog: &Dialog) {
+    page_filetype(panel, current, readers, dialog, FileType::Md);
 }
 
-fn page_filetype_typ(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
-    page_filetype(panel, current, readers, FileType::Typ);
+fn page_filetype_typ(panel: &Panel, current: &Settings, readers: &mut Readers, dialog: &Dialog) {
+    page_filetype(panel, current, readers, dialog, FileType::Typ);
+}
+
+/// 図 (.tbdg): テキストのエディタもペインも雛形も無いので、開き方だけ
+fn page_filetype_tbdg(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
+    let px = |v: i32| panel.from_dip_int(v);
+    let ft = FileType::Tbdg;
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+    let intro = StaticText::builder(panel)
+        .with_label(&tr("settings.files.diagram_intro"))
+        .build();
+    sizer.add(&intro, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
+    let note = StaticText::builder(panel)
+        .with_label(&tr("settings.files.open_note"))
+        .build();
+    sizer.add(
+        &note,
+        0,
+        SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
+        px(GAP),
+    );
+    let in_viewer = CheckBox::builder(panel)
+        .with_label(&tr("settings.files.open_in_viewer"))
+        .with_value(ft.open_mode(current) == OpenMode::Viewer)
+        .build();
+    sizer.add(&in_viewer, 0, SizerFlag::All, px(GAP));
+    panel.set_sizer(sizer, true);
+    intro.wrap(px(520));
+    readers.push(Box::new(move |s| {
+        ft.overrides_mut(s).open_mode = if in_viewer.is_checked() {
+            OpenMode::Viewer
+        } else {
+            OpenMode::Editor
+        };
+    }));
 }
 
 /// 形式ごとの設定: 開いたときのペインとバー、スクロール同期 (対応する形式だけ)、
 /// ファイルを渡されたときの開き方 (プレビューのある形式だけ)、新しいファイルの雛形
-fn page_filetype(panel: &Panel, current: &Settings, readers: &mut Readers, ft: FileType) {
+fn page_filetype(
+    panel: &Panel,
+    current: &Settings,
+    readers: &mut Readers,
+    dialog: &Dialog,
+    ft: FileType,
+) {
     let px = |v: i32| panel.from_dip_int(v);
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
+
+    // この種別だけのエディタ設定。「設定 → エディタ」の値が既定値で、ここで上書きした項目だけがこの種別で変わる。
+    // 上書きは別のダイアログで編集し、結果はこのダイアログを OK したときに保存する
+    let overrides = Rc::new(RefCell::new(ft.overrides(current).editor));
+    let override_button = Button::builder(panel)
+        .with_label(&tr("settings.override.button"))
+        .build();
+    let override_text = StaticText::builder(panel)
+        .with_label(&override_summary(&overrides.borrow()))
+        .build();
+    override_button.on_click({
+        let (overrides, dialog, panel, current) =
+            (overrides.clone(), dialog.clone(), *panel, current.clone());
+        move |_| {
+            // 既定値として見せるのは、エディタのページで今選んである値 (まだ OK していなくても)
+            let defaults = pending_settings(&current).editor;
+            let now = overrides.borrow().clone();
+            if let Some(new) = edit_editor_override(&dialog, ft, &defaults, &now) {
+                override_text.set_label(&override_summary(&new));
+                override_text.set_tooltip(&override_summary(&new));
+                *overrides.borrow_mut() = new;
+                panel.layout();
+            }
+        }
+    });
+    let override_row = BoxSizer::builder(Orientation::Horizontal).build();
+    override_row.add(&override_button, 0, LABEL_FLAGS, 0);
+    override_row.add(&override_text, 1, SizerFlag::Left | LABEL_FLAGS, px(GAP));
+    sizer.add_sizer(
+        &override_row,
+        0,
+        SizerFlag::Expand | SizerFlag::All,
+        px(GAP),
+    );
     // チェックボックスを横に並べる行
     let row = |boxes: &[&CheckBox]| {
         let row = BoxSizer::builder(Orientation::Horizontal).build();
@@ -1205,6 +1521,7 @@ fn page_filetype(panel: &Panel, current: &Settings, readers: &mut Readers, ft: F
         let value = text.get_value();
         // 既定のままなら書き出さない (表示言語を変えたときに既定も切り替わるように)
         panes.template = (value != ft.default_template()).then_some(value);
+        panes.editor = overrides.borrow().clone();
         *ft.overrides_mut(s) = panes;
     }));
 }
@@ -1267,7 +1584,8 @@ fn page_preview(panel: &Panel, current: &Settings, readers: &mut Readers, _dialo
             font_size,
             defaults.font_face,
             defaults.font_size,
-        ),
+        )
+        .0,
         0,
         SizerFlag::AlignLeft,
         0,
@@ -1499,6 +1817,16 @@ fn assoc_report(dialog: &Dialog, result: Result<(), String>) {
     }
 }
 
+/// 関連付けの形式に当たるファイル種別 (名前の表示に使う)
+fn assoc_filetype(kind: assoc::Kind) -> FileType {
+    match kind {
+        assoc::Kind::Txt => FileType::Txt,
+        assoc::Kind::Md => FileType::Md,
+        assoc::Kind::Typ => FileType::Typ,
+        assoc::Kind::Tbdg => FileType::Tbdg,
+    }
+}
+
 fn page_assoc(panel: &Panel, _current: &Settings, _readers: &mut Readers, dialog: &Dialog) {
     let px = |v: i32| panel.from_dip_int(v);
     let caps = assoc::capabilities();
@@ -1532,16 +1860,22 @@ fn page_assoc(panel: &Panel, _current: &Settings, _readers: &mut Readers, dialog
     );
     sizer.add_spacer(px(GAP * 2));
 
+    // 形式の一覧は、ページの中でスクロールする (形式が増えても、下のボタンと注意書きがページからはみ出さない)
+    let scroll = ScrolledWindow::builder(panel).build();
+    scroll.set_scroll_rate(0, px(12));
+    let list_panel = Panel::builder(&scroll).build();
+    let list = BoxSizer::builder(Orientation::Vertical).build();
     let rows: Rc<Vec<AssocRow>> = Rc::new(
-        [
-            (assoc::Kind::Txt, FileType::Txt),
-            (assoc::Kind::Md, FileType::Md),
-            (assoc::Kind::Typ, FileType::Typ),
-        ]
-        .into_iter()
-        .map(|(kind, ft)| assoc_row(panel, &sizer, dialog, kind, ft, caps))
-        .collect(),
+        assoc::Kind::ALL
+            .into_iter()
+            .map(|kind| assoc_row(&list_panel, &list, dialog, kind, assoc_filetype(kind), caps))
+            .collect(),
     );
+    list_panel.set_sizer(list, true);
+    let scroll_sizer = BoxSizer::builder(Orientation::Vertical).build();
+    scroll_sizer.add(&list_panel, 0, SizerFlag::Expand, 0);
+    scroll.set_sizer(scroll_sizer, true);
+    sizer.add(&scroll, 1, SizerFlag::Expand, 0);
     let refresh_all = {
         let rows = rows.clone();
         move || rows.iter().for_each(AssocRow::refresh)
@@ -1612,6 +1946,8 @@ fn page_assoc(panel: &Panel, _current: &Settings, _readers: &mut Readers, dialog
     }
     // 各行の幅が決まってから文字を入れる (幅に合わせてパスを省略するため)
     panel.layout();
+    scroll.layout();
+    list_panel.layout();
     set_path_label(&target_label, &target, str::to_string);
     refresh_all();
     // 他のアプリや Windows の設定画面で変えた結果を、ダイアログに戻ってきたときに映す

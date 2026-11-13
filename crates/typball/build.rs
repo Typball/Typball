@@ -9,6 +9,8 @@
 //! 3. ビルド元のコミット日時と SHA (`TYPBALL_COMMIT_TIME` / `TYPBALL_COMMIT`)、CI の nightly なら
 //!    `TYPBALL_BUILD_KIND=nightly` を埋め込む。更新機能は nightly の新旧をこのコミット日時で比べる。
 //! 4. Windows: アプリと関連付けのアイコン (assets/icons/typball.rc) を埋め込む。
+//! 5. 図エディタのアイコン (assets/diagram/icons/<セット>/<種類>.svg) を全部埋め込む表を作る。
+//!    アイコンを足すには、SVG をそのフォルダに置くだけでよい (表示名は icons/catalog.json)。
 
 use std::env;
 use std::path::PathBuf;
@@ -21,6 +23,7 @@ fn main() {
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
 
     set_build_info();
+    embed_diagram_icons();
 
     if target_os == "windows" && target_env == "gnu" {
         link_static_libstdcxx();
@@ -68,6 +71,51 @@ fn set_build_info() {
     println!("cargo:rustc-env=TYPBALL_BUILD_KIND={kind}");
     println!("cargo:rustc-env=TYPBALL_COMMIT_TIME={commit_time}");
     println!("cargo:rustc-env=TYPBALL_COMMIT={commit}");
+}
+
+/// 図エディタのアイコンの表 (`$OUT_DIR/diagram_icons.rs`) を作る。中身は
+/// `pub static ICONS: &[(&str, &[u8])]` で、名前は "セット/種類"、値は SVG の中身。
+/// フォルダ名とファイル名は URL とスタイルにそのまま使うので、英小文字・数字・ハイフンだけにする
+fn embed_diagram_icons() {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
+    let icons_dir = manifest_dir.join("assets/diagram/icons");
+    println!("cargo:rerun-if-changed={}", icons_dir.display());
+    let valid = |name: &str| {
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    };
+    let mut entries: Vec<(String, PathBuf)> = Vec::new();
+    let mut sets: Vec<PathBuf> = std::fs::read_dir(&icons_dir)
+        .map(|dir| dir.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    sets.sort();
+    for set in sets.iter().filter(|p| p.is_dir()) {
+        let set_name = set.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(valid(&set_name), "diagram icon set name: {set_name}");
+        let mut files: Vec<PathBuf> = std::fs::read_dir(set)
+            .map(|dir| dir.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default();
+        files.sort();
+        for file in files {
+            if file.extension().and_then(|e| e.to_str()) != Some("svg") {
+                continue;
+            }
+            let kind = file.file_stem().unwrap().to_string_lossy().into_owned();
+            assert!(valid(&kind), "diagram icon name: {set_name}/{kind}");
+            entries.push((format!("{set_name}/{kind}"), file));
+        }
+    }
+    let mut code = String::from("pub static ICONS: &[(&str, &[u8])] = &[\n");
+    for (name, path) in &entries {
+        // パスは Rust の文字列にするので、区切りを / にそろえる (Windows の \ はエスケープになる)
+        let path = path.display().to_string().replace('\\', "/");
+        code.push_str(&format!("    ({name:?}, include_bytes!({path:?})),\n"));
+    }
+    code.push_str("];\n");
+    let out = PathBuf::from(env::var("OUT_DIR").unwrap_or_default()).join("diagram_icons.rs");
+    std::fs::write(&out, code).expect("write diagram_icons.rs");
 }
 
 fn git(dir: &PathBuf, args: &[&str]) -> Option<String> {

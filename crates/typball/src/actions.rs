@@ -46,7 +46,7 @@ impl Action {
         match filetype {
             FileType::Typ => &[Bold, Italic, Heading, Code, Math, Link, List, Export],
             FileType::Md => &[Bold, Italic, Heading, Code, Quote, Link, List, Export],
-            FileType::Txt => &[],
+            FileType::Txt | FileType::Tbdg => &[],
         }
     }
 

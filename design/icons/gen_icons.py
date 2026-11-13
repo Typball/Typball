@@ -287,6 +287,7 @@ FILETYPES = [
     ("typ", "#1f8a9a", ["= Heading", "#set text(", "Lorem ipsum", "$ x^2 $"]),
     ("md", "#4b4fb8", ["# Heading", "- item", "**bold**", "[link](..)"]),
     ("txt", "#6b7280", ["Lorem ipsum", "dolor sit", "amet, consec", "tetur adip"]),
+    ("tbdg", "#c2621b", ["[A] --> [B]", "   |", "<C> --> [D]", "   |"]),
 ]
 
 
@@ -354,8 +355,8 @@ def doc_icon_small(ext, color, pid, label=True):
     ]
     if label:
         body.append(
-            f'<text x="{16*s}" y="{28.4*s}" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-weight="bold" '
-            f'font-size="{9.6*s}" text-anchor="middle" fill="#ffffff">{ext.upper()}</text>'
+            f'<text x="{16*s}" y="{(28.4 if len(ext) <= 3 else 27.8)*s}" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-weight="bold" '
+            f'font-size="{(9.6 if len(ext) <= 3 else 7.6)*s}" text-anchor="middle" fill="#ffffff">{ext.upper()}</text>'
         )
     return svg(1024, defs, "\n  ".join(body))
 

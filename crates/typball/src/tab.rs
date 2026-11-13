@@ -12,7 +12,8 @@
 //! │  │     │  │  ├ actionbar (ActionBar)     設定 [filetypes.*] show_actionbar
 //! │  │     │  │  ├ findbar (FindBar)         検索 / 置換バー (検索メニューで出す。普段は隠れている)
 //! │  │     │  │  ├ ruler  (Ruler)            設定 show_ruler
-//! │  │     │  │  └ hbox: stc | gutter        設定 line_numbers = right / both
+//! │  │     │  │  ├ hbox: stc | gutter        設定 line_numbers = right / both
+//! │  │     │  │  └ diagram_host (Panel)      図 (.tbdg) のタブだけ: 図エディタ (上の 4 つは隠す)
 //! │  │     │  └ slots[Bottom] (SplitterWindow)  下に置いたペイン (エディタ幅。[panes] bottom_width = "editor")
 //! │  │     └ slots[Right] (SplitterWindow)   右に置いたペイン
 //! │  └ wide_bottom (SplitterWindow)          下に置いたペイン (ウィンドウ幅。bottom_width = "window")
@@ -34,6 +35,11 @@
 //! 設定 `[panes]` で、ヘッダのメニューから変えると全ウィンドウの全タブに反映される。
 //! wxDragon に Reparent が無いので、場所を変えるときや切り離すときは中身 (ListBox / ScrolledWindow)
 //! を作り直す。テキストの持ち主は Scintilla。ファイルのパスや種別は [`Document`] が持つ。
+//!
+//! 図 (.tbdg) のタブでは、エディタ部分に図エディタ (`diagram.rs` の WebView) を置き、Scintilla は空のまま
+//! 隠しておく。中身 (SVG の文字列) の持ち主は図エディタで、[`Tab::text`] / [`Tab::is_modified`] /
+//! [`Tab::mark_saved`] などがそちらへ振り分けるので、保存・バックアップ・タブの移動はテキストの文書と
+//! 同じ処理で動く。
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -42,6 +48,7 @@ use wxdragon::prelude::*;
 
 use crate::actionbar::{self, ActionBar};
 use crate::actions::Action;
+use crate::diagram::DiagramEditor;
 #[cfg(windows)]
 use crate::dnd_win;
 use crate::document::Document;
@@ -201,6 +208,18 @@ impl EolField {
         self.label.refresh(true, None);
     }
 
+    /// 欄を空にする (図のタブ: 中身は SVG で、改行コードを気にする場面が無い)
+    pub fn clear(&self) {
+        if self.shown.replace(None).is_none() && self.label.get_label().is_empty() {
+            return;
+        }
+        self.label.set_label("");
+        self.label.set_tooltip("");
+        self.widths.borrow_mut().clear();
+        self.apply_widths();
+        self.label.refresh(true, None);
+    }
+
     /// 欄 1..=4 (種別・行桁・文字数・文字コード) の幅を `measured` の文字が収まる幅にして、欄を右に詰める。
     /// 行桁と文字数は、数字の桁が増えるたびに欄が動かないように、桁を多めに取った文字で測る
     pub fn fit(&self, measured: Vec<String>) {
@@ -295,6 +314,9 @@ pub struct TabHost {
     pub on_action: Rc<dyn Fn(Action)>,
     /// エディタにファイルがドロップされたとき (開けたら true)
     pub on_drop_files: Rc<dyn Fn(Vec<String>) -> bool>,
+    /// 図エディタにフォーカスがあるときのショートカット ("ctrl+s" など)。WebView の中のキーはフレームの
+    /// アクセラレータに届かないので、ページが知らせてきたものをメニューの処理へ回す
+    pub on_key: Rc<dyn Fn(&str)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -419,6 +441,10 @@ pub struct Tab {
     bottom_wide: Rc<Cell<bool>>,
     strips: [Strip; 3],
     editor_box: Panel,
+    /// 図エディタの置き場 (図のタブのときだけ見える)
+    diagram_host: Panel,
+    /// 図エディタ (図のタブのときだけある)
+    diagram: Rc<RefCell<Option<Rc<DiagramEditor>>>>,
     actionbar: ActionBar,
     findbar: FindBar,
     ruler: Ruler,
@@ -515,6 +541,9 @@ impl Tab {
         // --- エディタ ---
         let actionbar = ActionBar::new(&editor_box, filetype);
         let stc = StyledTextCtrl::builder(&editor_box).build();
+        // 種別ごとのエディタ設定 ([filetypes.*.editor]) を当てるために、先に種別を覚えさせる
+        editor::set_filetype(&stc, filetype);
+        let settings = settings.for_filetype(filetype);
         editor::setup_editor(&stc, &settings);
         // 右クリックは Scintilla の英語のメニューではなく自前のメニュー (bind_events) を出す
         scintilla::disable_popup(&stc);
@@ -552,6 +581,10 @@ impl Tab {
         vbox.add(findbar.window(), 0, SizerFlag::Expand, 0);
         vbox.add(ruler.window(), 0, SizerFlag::Expand, 0);
         vbox.add_sizer(&hbox, 1, SizerFlag::Expand, 0);
+        // 図のタブではこちらだけを見せる (sync_editor_kind)
+        let diagram_host = Panel::builder(&editor_box).build();
+        diagram_host.show(false);
+        vbox.add(&diagram_host, 1, SizerFlag::Expand, 0);
         editor_box.set_sizer(vbox, true);
 
         // --- 折りたたみバーとページ全体の配置 ---
@@ -590,6 +623,8 @@ impl Tab {
             )),
             strips,
             editor_box,
+            diagram_host,
+            diagram: Rc::new(RefCell::new(None)),
             actionbar,
             findbar,
             ruler,
@@ -692,7 +727,7 @@ impl Tab {
         });
         // エディタが自分を描いた直後に、同じ描画の中で不可視文字の記号を描き足す (marks.rs)
         crate::marks::on_painted(&stc, move |dc, update, composing| {
-            crate::marks::paint(&stc, &settings::get(), dc, update, composing);
+            crate::marks::paint(&stc, &editor::settings_for(&stc), dc, update, composing);
         });
         // エディタの大きさが変わったらルーラーと右側行番号も描き直す。
         // 「指定文字数で折り返し」の右余白もエディタの幅で決まる
@@ -779,6 +814,9 @@ impl Tab {
     /// 編集メニュー (Ctrl+C など) の相手。フォーカスのあるコントロールで決める:
     /// 検索バーの入力欄 → エディタ → プレビューの WebView (あれば) → それ以外はエディタ
     pub fn edit_target(&self) -> EditTarget {
+        if let Some(diagram) = self.diagram() {
+            return EditTarget::Diagram(diagram);
+        }
         if let Some(text) = self.findbar.focused_text() {
             return EditTarget::Text(text);
         }
@@ -795,16 +833,25 @@ impl Tab {
 
     /// 検索バーを出す (`replace` なら置換の段も)
     pub fn show_find(&self, replace: bool) {
+        if self.is_diagram() {
+            return;
+        }
         self.findbar.show(replace);
     }
 
     /// 次 (前) の一致へ。検索語がまだ無ければバーを出す
     pub fn find_next(&self, forward: bool) {
+        if self.is_diagram() {
+            return;
+        }
         self.findbar.find_next(forward);
     }
 
     /// 指定行 (1 始まり) へ移動してエディタにフォーカスを移す
     pub fn go_to_line(&self, line: i32) {
+        if self.is_diagram() {
+            return;
+        }
         let last = self.stc.get_line_count().max(1);
         self.stc.goto_line(line.clamp(1, last) - 1);
         self.stc.ensure_caret_visible();
@@ -890,7 +937,7 @@ impl Tab {
 
     /// アクション (書式付け) を実行する。書式付け以外は呼び出し側で処理する
     pub fn apply_action(&self, action: Action) {
-        if action.is_format() {
+        if action.is_format() && !self.is_diagram() {
             actionbar::apply_format(&self.stc, action, self.filetype());
         }
     }
@@ -1188,7 +1235,12 @@ impl Tab {
             Some(PaneContent::Preview(preview)) => {
                 let path = self.doc.borrow().path.clone();
                 let report = preview.render(&text, path.as_deref());
-                self.console_set(&typst_log(&report));
+                // 文書の中の Mermaid: まだ描いていないものを描かせる (描けたら組み直しに来る。mermaid.rs)。
+                // 書き間違いなどで描けないものは、コンソールで知らせる
+                crate::mermaid::render_pending(&self.host.pages);
+                let mut lines = typst_log(&report);
+                lines.extend(crate::mermaid::diagnostics(&text));
+                self.console_set(&lines);
             }
             Some(PaneContent::Web(web)) => {
                 let path = self.doc.borrow().path.clone();
@@ -1856,10 +1908,87 @@ impl Tab {
     /// タブを閉じるとき: 浮動ウィンドウも一緒に閉じてからページを破棄する
     pub fn destroy(&self) {
         self.render_timer.stop();
+        editor::forget(&self.stc);
         for which in Pane::ALL {
             self.destroy_float(which);
         }
+        if let Some(diagram) = self.diagram.borrow_mut().take() {
+            diagram.clear_handlers();
+        }
         self.page.destroy();
+    }
+
+    // -----------------------------------------------------------------------
+    // 図エディタ
+    // -----------------------------------------------------------------------
+
+    /// 図エディタ (図のタブだけ)
+    pub fn diagram(&self) -> Option<Rc<DiagramEditor>> {
+        self.diagram.borrow().clone()
+    }
+
+    /// 図エディタで開いているタブか
+    pub fn is_diagram(&self) -> bool {
+        self.diagram.borrow().is_some()
+    }
+
+    /// エディタ部分を文書の種別に合わせる: 図なら図エディタを作ってテキストのエディタ (とルーラー・
+    /// 行番号・検索バー・アクションバー) を隠し、図でなくなったら図エディタを捨ててテキストに戻す
+    fn sync_editor_kind(&self) {
+        let want = self.filetype().is_diagram();
+        if want && !self.is_diagram() {
+            let editor = DiagramEditor::new(&self.diagram_host);
+            let sizer = BoxSizer::builder(Orientation::Vertical).build();
+            sizer.add(&editor.container, 1, SizerFlag::Expand, 0);
+            self.diagram_host.set_sizer(sizer, true);
+            editor.on_change({
+                let tab = self.clone();
+                move || {
+                    tab.backup_dirty.set(true);
+                    tab.update_title();
+                }
+            });
+            editor.on_key({
+                let host = self.host.clone();
+                move |key| (host.on_key)(key)
+            });
+            *self.diagram.borrow_mut() = Some(editor);
+        } else if !want {
+            if let Some(editor) = self.diagram.borrow_mut().take() {
+                editor.clear_handlers();
+                editor.container.destroy();
+            }
+        }
+        let settings = editor::settings_for(&self.stc);
+        self.stc.show(!want);
+        self.ruler
+            .window()
+            .show(!want && settings.editor.show_ruler);
+        self.gutter
+            .window()
+            .show(!want && settings.editor.line_numbers.right());
+        if want {
+            self.findbar.hide();
+        }
+        self.diagram_host.show(want);
+        self.apply_actionbar_setting(&settings);
+    }
+
+    /// キー入力を受ける場所 (テキストのエディタか図エディタ) にフォーカスを移す
+    pub fn focus_editor(&self) {
+        match self.diagram() {
+            Some(diagram) => diagram.focus(),
+            None => self.stc.set_focus(),
+        }
+    }
+
+    /// 図形の文字を入力している途中なら、確定させてから `f` を実行して true を返す (`f` は後で呼ばれる)。
+    /// 入力の途中でなければ (テキストのタブも) 何もせず false を返す
+    pub fn commit_then(&self, f: impl FnOnce() + 'static) -> bool {
+        match self.diagram() {
+            Some(diagram) => diagram.commit_then(f),
+            None => false,
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1867,7 +1996,10 @@ impl Tab {
     // -----------------------------------------------------------------------
 
     pub fn text(&self) -> String {
-        self.stc.get_text()
+        match self.diagram() {
+            Some(diagram) => diagram.text(),
+            None => self.stc.get_text(),
+        }
     }
 
     pub fn filetype(&self) -> FileType {
@@ -1876,7 +2008,10 @@ impl Tab {
 
     /// 未保存の変更があるか
     pub fn is_modified(&self) -> bool {
-        self.stc.is_modified()
+        match self.diagram() {
+            Some(diagram) => diagram.is_modified(),
+            None => self.stc.is_modified(),
+        }
     }
 
     /// ファイルから読んだテキストを入れる (開く・読み直し)
@@ -1887,6 +2022,21 @@ impl Tab {
     }
 
     fn load_text(&self, text: &str, modified: bool) {
+        self.sync_editor_kind();
+        if let Some(diagram) = self.diagram() {
+            // 図: 中身は図エディタが持つ。テキストのエディタは空にしておく
+            self.large.set(false);
+            self.loading.set(true);
+            self.stc.set_text("");
+            self.stc.empty_undo_buffer();
+            self.stc.set_save_point();
+            self.loading.set(false);
+            *self.tracker.borrow_mut() = ChangeTracker::new("");
+            self.char_count.set(0);
+            self.eol_counts.set(EolCounts::default());
+            diagram.set_text(text, modified);
+            return;
+        }
         let large = is_large(text.len(), &settings::get());
         self.large.set(large);
         editor::set_large_mode(&self.stc, large);
@@ -1943,6 +2093,11 @@ impl Tab {
 
     /// 保存した直後に呼ぶ: 未保存の編集行の印を「保存済み」に替える (設定によっては消す)
     pub fn mark_saved(&self) {
+        if let Some(diagram) = self.diagram() {
+            diagram.mark_saved();
+            self.update_title();
+            return;
+        }
         self.stc.set_save_point();
         let settings = settings::get();
         editor::mark_changes_saved(&self.stc, &settings);
@@ -1961,9 +2116,31 @@ impl Tab {
         self.request_render();
     }
 
+    /// このタブが取り込んでいるかもしれないファイル (図など) が保存された: プレビューを組み直す。
+    /// Typst は変わったファイルだけ読み直し、Markdown の WebView は画像のキャッシュを更新する
+    pub fn linked_file_saved(&self) {
+        if !self.filetype().has_preview() {
+            return;
+        }
+        if let Some(web) = self.active_web_preview() {
+            web.on_saved();
+        }
+        self.request_render();
+    }
+
+    /// Typst の文書なら、プレビューを組み直す (文書の中の Mermaid が描けたとき)
+    pub fn rerender_typst(&self) {
+        if self.filetype() == FileType::Typ {
+            self.request_render();
+        }
+    }
+
     /// 編集行の強調を消す (表示メニュー)。`saved_only` なら保存済みの印だけ、
     /// そうでなければ未保存の印も含めてすべて
     pub fn clear_change_marks(&self, saved_only: bool) {
+        if self.is_diagram() {
+            return;
+        }
         editor::clear_change_marks(&self.stc, !saved_only, true);
         editor::refresh_line_numbers(&self.stc, &settings::get());
         self.refresh_decorations();
@@ -2007,6 +2184,13 @@ impl Tab {
     /// 種別が変わった (名前を付けて保存で拡張子が変わった) とき
     pub fn filetype_changed(&self) {
         let filetype = self.filetype();
+        // 図 ⇔ テキストの切り替え: 中身を今のエディタから取り出して、新しい種別のエディタに入れ直す
+        // (図を .svg や .txt で保存すると SVG のソースになり、その逆は図として開き直す)。
+        // 保存した直後に呼ばれるので、変更なしの状態で入れる
+        if self.is_diagram() != filetype.is_diagram() {
+            let text = self.text();
+            self.load_text(&text, false);
+        }
         for which in Pane::ALL {
             if !which.available(filetype) {
                 self.show_pane(which, false);
@@ -2021,7 +2205,18 @@ impl Tab {
         }
         self.actionbar.set_filetype(filetype);
         self.apply_actionbar_setting(&settings::get());
-        self.refresh_from_text(&self.text());
+        // 種別ごとのエディタ設定 ([filetypes.*.editor]) を、新しい種別のものに当て直す
+        editor::set_filetype(&self.stc, filetype);
+        let settings = editor::settings_for(&self.stc);
+        editor::apply_settings(&self.stc, &settings);
+        if !self.is_diagram() {
+            self.ruler.window().show(settings.editor.show_ruler);
+            self.gutter
+                .window()
+                .show(settings.editor.line_numbers.right());
+            self.editor_box.layout();
+            self.refresh_from_text(&self.text());
+        }
         self.update_title();
         self.update_status();
     }
@@ -2067,6 +2262,22 @@ impl Tab {
     /// ステータスバーの種別・行桁・文字数・文字コード・改行コードを更新する (選択中のタブだけ)
     pub fn update_status(&self) {
         if !self.is_current() {
+            return;
+        }
+        if self.is_diagram() {
+            // 図には行桁も文字数も無い。種別と文字コード (常に UTF-8) だけ出す。改行コードも出さない:
+            // SVG (XML) は改行コードを区別せず (読むときに LF にそろえられる)、図エディタは 1 行で書き出す
+            let status = &self.host.status;
+            let kind = tr(self.filetype().short_name_key());
+            let encoding = self.doc.borrow().encoding.label();
+            status.set_status_text(&kind, 1);
+            status.set_status_text("", 2);
+            status.set_status_text("", 3);
+            status.set_status_text(&encoding, 4);
+            self.host.eol.clear();
+            self.host
+                .eol
+                .fit(vec![kind, String::new(), String::new(), encoding]);
             return;
         }
         let stc = &self.stc;
@@ -2135,7 +2346,7 @@ impl Tab {
     fn insert_soft_tab(&self) -> bool {
         let stc = self.stc;
         let (tab, use_tabs) = {
-            let s = settings::get();
+            let s = editor::settings_for(&stc);
             (s.editor.tab_width.clamp(1, 16) as usize, s.editor.use_tabs)
         };
         if use_tabs || scintilla::selections(&stc) > 1 {
@@ -2171,7 +2382,10 @@ impl Tab {
         if before.bytes().all(|b| b == b' ' || b == b'\t') {
             return false;
         }
-        let tab = settings::get().editor.tab_width.clamp(1, 16) as usize;
+        let tab = editor::settings_for(&self.stc)
+            .editor
+            .tab_width
+            .clamp(1, 16) as usize;
         let index = crate::tabs::previous_stop_index(&before, tab, self.char_width());
         let target = pos - (before.len() - index) as i32;
         stc.set_selection(target, target);
@@ -2206,7 +2420,7 @@ impl Tab {
             return false;
         };
         let (mode, tab) = {
-            let s = settings::get();
+            let s = editor::settings_for(&self.stc);
             (s.editor.backspace, s.editor.tab_width.clamp(1, 16) as usize)
         };
         let col = crate::tabs::column(prefix, tab, self.char_width());
@@ -2225,8 +2439,11 @@ impl Tab {
     /// 桁は半角の幅を 1 として、エディタのフォントで測った文字の幅で数える (全角文字は 2)。エディタが
     /// タブをそろえる位置と同じ数え方なので、変換の前後で文字の位置は変わらない
     pub fn convert_tabs(&self, to_spaces: bool) -> bool {
+        if self.is_diagram() {
+            return false;
+        }
         let stc = self.stc;
-        let tab = settings::get().editor.tab_width.clamp(1, 16) as usize;
+        let tab = editor::settings_for(&stc).editor.tab_width.clamp(1, 16) as usize;
         let text = self.text();
         let width = self.char_width();
         let converted = if to_spaces {
@@ -2259,6 +2476,9 @@ impl Tab {
     /// 文書のすべての改行を `eol` にそろえ、これから入力する改行も合わせる。改行が変われば文書は
     /// 未保存になり、1 回の Undo で戻せる (Undo しても、これから入力する改行は `eol` のまま)
     pub fn convert_line_endings(&self, eol: LineEnding) {
+        if self.is_diagram() {
+            return;
+        }
         scintilla::convert_eols(&self.stc, eol);
         scintilla::set_eol_mode(&self.stc, eol);
         if self.large.get() {
@@ -2308,15 +2528,25 @@ impl Tab {
 
     /// 設定ダイアログで変えられる項目を反映する (`before` は変更前の設定)
     pub fn apply_settings(&self, before: &Settings, settings: &Settings) {
+        // エディタ設定は、このタブの種別で有効な値 (全体の設定 + 種別ごとの上書き) を使う
+        let settings = &editor::resolved(&self.stc, settings);
         editor::apply_settings(&self.stc, settings);
         // 不可視文字の記号 (表示の有無や、比べる改行コード) は、エディタを描き直すと変わる
         self.stc.refresh(true, None);
-        self.ruler.window().show(settings.editor.show_ruler);
+        // 図のタブではルーラーも右側の行番号も出さない
+        let text_editor = !self.is_diagram();
+        self.ruler
+            .window()
+            .show(text_editor && settings.editor.show_ruler);
         self.gutter
             .window()
-            .show(settings.editor.line_numbers.right());
+            .show(text_editor && settings.editor.line_numbers.right());
         self.apply_actionbar_setting(settings);
         self.apply_pane_defaults(before, settings);
+        if let Some(diagram) = self.diagram() {
+            // 言語が変わったかもしれない (ページの文言を合わせる)
+            diagram.apply_options();
+        }
         // プレビューのフォントかタブ幅が変わった: Typst は組み直し、Markdown はページを読み直す
         if before.preview.font_face != settings.preview.font_face
             || before.preview.font_size != settings.preview.font_size
@@ -2341,6 +2571,11 @@ impl Tab {
             editor::apply_settings(&self.stc, settings);
             self.refresh_decorations();
             self.stc.refresh(true, None);
+        }
+        if changed.ui {
+            if let Some(diagram) = self.diagram() {
+                diagram.apply_options();
+            }
         }
         if changed.preview {
             match self.active_content(Pane::Preview) {

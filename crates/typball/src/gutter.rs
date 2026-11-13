@@ -103,7 +103,7 @@ fn paint_ruler(panel: &Panel, stc: &StyledTextCtrl) {
     dc.set_pen(rgb(c.ruler_tick), 1, PenStyle::Solid);
     // タブ位置 (タブ幅ごとの桁) の示し方
     let (tab, tab_marks) = {
-        let s = crate::settings::get();
+        let s = editor::settings_for(stc);
         (s.editor.tab_width.clamp(1, 16), s.editor.ruler_tabs)
     };
     let px = panel.from_dip_int(1).max(1);
@@ -224,7 +224,7 @@ fn paint_gutter(panel: &Panel, stc: &StyledTextCtrl) {
     dc.set_pen(rgb(c.separator), 1, PenStyle::Solid);
     dc.draw_line(0, 0, 0, height);
 
-    let settings = settings::get();
+    let settings = editor::settings_for(stc);
     let zoom = stc.get_zoom();
     // 行番号は UI フォント (設定のフォントはエディタの中身だけ)。ズームには追従する
     let (Some(normal), Some(bold)) = (

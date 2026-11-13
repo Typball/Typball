@@ -26,6 +26,7 @@ const APP_NAME: &str = "Typball";
 const ICON_NAME: &str = "typball";
 /// `.typ` の MIME タイプを自分で定義するときのファイル名
 const TYPST_PACKAGE: &str = "typball-typst.xml";
+const TBDG_PACKAGE: &str = "typball-diagram.xml";
 const APP_ICON_SIZE: u32 = 256;
 static APP_ICON_RGBA: &[u8] = include_bytes!("../../assets/icons/Typball-256.rgba");
 /// アイコンは選べない
@@ -128,8 +129,14 @@ impl Dirs {
         self.data.join("applications").join(DESKTOP_ID)
     }
 
+    /// MIME タイプの定義ファイルの置き場 (`name` は [`own_mime`] のファイル名)
+    fn package_path(&self, name: &str) -> PathBuf {
+        self.data.join("mime/packages").join(name)
+    }
+
+    #[cfg(test)]
     fn typst_package_path(&self) -> PathBuf {
-        self.data.join("mime/packages").join(TYPST_PACKAGE)
+        self.package_path(TYPST_PACKAGE)
     }
 
     fn mimeapps_path(&self) -> PathBuf {
@@ -141,14 +148,15 @@ impl Dirs {
         std::iter::once(&self.data).chain(&self.system_data)
     }
 
-    /// この形式の MIME タイプ。`.typ` はシステムが別の名前で知っていればそれに合わせる
+    /// この形式の MIME タイプ。Typball が定義する形式 (`.typ` / `.tbdg`) は、システムが別の名前で
+    /// 知っていればそれに合わせる
     fn mime(&self, kind: Kind) -> String {
-        if kind == Kind::Typ {
+        if let Some(own) = own_mime(kind) {
             let known = self
                 .system_data
                 .iter()
                 .filter_map(|dir| fs::read_to_string(dir.join("mime/globs2")).ok())
-                .find_map(|globs| mime_for_glob(&globs, "*.typ"));
+                .find_map(|globs| mime_for_glob(&globs, own.glob));
             if let Some(mime) = known {
                 return mime;
             }
@@ -162,9 +170,11 @@ impl Dirs {
 
     fn register(&self, kind: Kind, exe: &Path) -> std::io::Result<()> {
         let mime = self.mime(kind);
-        // .typ の種類をシステムが知らなければ定義を置く
-        if kind == Kind::Typ && mime == Kind::Typ.mime() {
-            write_file(&self.typst_package_path(), TYPST_MIME_XML.as_bytes())?;
+        // この形式の種類をシステムが知らなければ定義を置く (.typ と .tbdg)
+        if let Some(own) = own_mime(kind) {
+            if mime == kind.mime() {
+                write_file(&self.package_path(own.package), own.xml.as_bytes())?;
+            }
         }
         let mut mimes = self.read_desktop().map(|d| d.mimes).unwrap_or_default();
         if !mimes.contains(&mime) {
@@ -199,8 +209,8 @@ impl Dirs {
                 )?;
             }
         }
-        if kind == Kind::Typ {
-            remove_file(&self.typst_package_path())?;
+        if let Some(own) = own_mime(kind) {
+            remove_file(&self.package_path(own.package))?;
         }
         if self.mimeapps_path().exists() {
             self.edit_mimeapps(|text| remove_app(text, &mime, DESKTOP_ID))?;
@@ -308,6 +318,41 @@ const TYPST_MIME_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
   </mime-type>
 </mime-info>
 "#;
+
+const TBDG_MIME_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-typball-diagram">
+    <comment>Typball diagram</comment>
+    <sub-class-of type="image/svg+xml"/>
+    <glob pattern="*.tbdg"/>
+  </mime-type>
+</mime-info>
+"#;
+
+/// Typball が自分で MIME タイプを定義する形式 (システムに決まった種類が無いもの)
+struct OwnMime {
+    /// 定義ファイルの名前 (`~/.local/share/mime/packages/` に置く)
+    package: &'static str,
+    xml: &'static str,
+    /// システムが別の名前でこの拡張子を知っているかを調べるための glob
+    glob: &'static str,
+}
+
+fn own_mime(kind: Kind) -> Option<OwnMime> {
+    match kind {
+        Kind::Typ => Some(OwnMime {
+            package: TYPST_PACKAGE,
+            xml: TYPST_MIME_XML,
+            glob: "*.typ",
+        }),
+        Kind::Tbdg => Some(OwnMime {
+            package: TBDG_PACKAGE,
+            xml: TBDG_MIME_XML,
+            glob: "*.tbdg",
+        }),
+        Kind::Txt | Kind::Md => None,
+    }
+}
 
 /// typball.desktop の中身
 fn desktop_entry(exe: &Path, mimes: &[String]) -> String {
@@ -684,6 +729,26 @@ mod tests {
         t.dirs.register(Kind::Typ, exe).unwrap();
         assert!(!t.dirs.typst_package_path().exists());
         assert_eq!(t.dirs.read_desktop().unwrap().mimes, ["text/vnd.typst"]);
+    }
+
+    #[test]
+    fn diagrams_get_their_own_mime_type() {
+        let t = TestDirs::new();
+        let exe = Path::new("/usr/bin/Typball");
+        t.dirs.register(Kind::Tbdg, exe).unwrap();
+        let package = t.dirs.package_path(TBDG_PACKAGE);
+        let xml = fs::read_to_string(&package).unwrap();
+        assert!(xml.contains(r#"<glob pattern="*.tbdg"/>"#), "{xml}");
+        assert_eq!(
+            t.dirs.read_desktop().unwrap().mimes,
+            ["application/x-typball-diagram"]
+        );
+        // .typ の定義とは別のファイルなので、片方を解除してももう片方は残る
+        t.dirs.register(Kind::Typ, exe).unwrap();
+        t.dirs.unregister(Kind::Tbdg).unwrap();
+        assert!(!package.exists());
+        assert!(t.dirs.typst_package_path().is_file());
+        assert_eq!(t.dirs.read_desktop().unwrap().mimes, ["text/x-typst"]);
     }
 
     #[test]

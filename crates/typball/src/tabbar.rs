@@ -842,7 +842,7 @@ fn label_of(item: &TabItem) -> String {
     }
 }
 
-/// 種別のアイコン: テキストは罫線入りの紙、Markdown は青の "M"、Typst は青緑の "T"。
+/// 種別のアイコン: テキストは罫線入りの紙、Markdown は青の "M"、Typst は青緑の "T"、図は橙の "D"。
 /// 左上 (x, y) に一辺 `size` px で描く (絵は 16px で設計してあり、`size` に合わせて拡大する)
 pub fn paint_icon(dc: &dyn DeviceContext, filetype: FileType, x: i32, y: i32, size: i32) {
     let scale = size as f64 / ICON as f64;
@@ -861,6 +861,7 @@ pub fn paint_icon(dc: &dyn DeviceContext, filetype: FileType, x: i32, y: i32, si
         }
         FileType::Md => badge(dc, x, y, size, 0x0b5cad, "M"),
         FileType::Typ => badge(dc, x, y, size, 0x239dad, "T"),
+        FileType::Tbdg => badge(dc, x, y, size, 0xc2610f, "D"),
     }
 }
 

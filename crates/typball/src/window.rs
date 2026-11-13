@@ -332,6 +332,7 @@ fn build_window(position: Option<Point>) -> WindowRef {
             on_layout_changed: Rc::new(|| {}),
             on_action: Rc::new(|_| {}),
             on_drop_files: Rc::new(|_| false),
+            on_key: Rc::new(|_| {}),
         },
         tabs: Vec::new(),
         _timer: None,
@@ -362,6 +363,14 @@ fn build_window(position: Option<Point>) -> WindowRef {
         move || {
             if let Some(win) = weak.upgrade() {
                 update_dynamic_menus(&win);
+            }
+        }
+    });
+    win.borrow_mut().host.on_key = Rc::new({
+        let weak = weak.clone();
+        move |key| {
+            if let Some(win) = weak.upgrade() {
+                handle_key(&win, key);
             }
         }
     });
@@ -423,6 +432,8 @@ fn build_window(position: Option<Point>) -> WindowRef {
                 return;
             }
             save_window_geometry(&win.borrow().frame);
+            // Mermaid を描く見えない WebView がこのウィンドウにあれば手放す (次に使うときに作り直される)
+            crate::mermaid::release(&win.borrow().host.pages);
             // 閉じるタブのスナップショットは要らない (未保存の確認は済んでいる)
             let tabs = win.borrow().tabs.clone();
             for tab in &tabs {
@@ -593,7 +604,9 @@ fn bind_toolbar(win: &WindowRef, toolbar: &ToolBar) {
         let target = tab.as_ref().map(|t| t.edit_target());
         w.toolbar.set_enabled(|item| match item {
             ToolItem::New | ToolItem::Open => true,
-            ToolItem::Save | ToolItem::Find | ToolItem::Replace => tab.is_some(),
+            ToolItem::Save => tab.is_some(),
+            // 検索と置換はテキストのエディタのもの (図のタブでは使えない)
+            ToolItem::Find | ToolItem::Replace => tab.as_ref().is_some_and(|t| !t.is_diagram()),
             _ => match (toolbar_edit_item(item), &target) {
                 (Some(edit), Some(target)) => edit.enabled(target),
                 _ => false,
@@ -636,6 +649,16 @@ fn apply_toolbar_visibility(show: bool) {
             if let Some(parent) = bar.get_parent() {
                 parent.layout();
             }
+        }
+    }
+}
+
+/// 全ウィンドウの Typst のタブのプレビューを組み直す (文書の中の Mermaid が描けたとき)
+pub fn rerender_typst() {
+    for win in all_windows() {
+        let tabs = win.borrow().tabs.clone();
+        for tab in &tabs {
+            tab.rerender_typst();
         }
     }
 }
@@ -974,12 +997,39 @@ fn update_dynamic_menus(win: &WindowRef) {
         .map(|t| t.doc.borrow().path.is_some())
         .unwrap_or(false);
     bar.enable_item(ID_OPEN_VIEWER, has_path);
-    // 「文字コードを指定して開き直す」は保存済みのファイルだけ
+    // 図のタブ (.tbdg) では、テキストのエディタ用の項目は使えないので選べなくする: 検索・置換・行の移動、
+    // 折り返し・行番号・ルーラー・記号の表示・編集行の強調、文字コードを指定した開き直し
+    let text_editor = !tab.as_ref().is_some_and(|t| t.is_diagram());
+    for id in [
+        ID_FIND,
+        ID_FIND_NEXT,
+        ID_FIND_PREV,
+        ID_REPLACE,
+        ID_GOTO_LINE,
+        ID_VIEW_RULER,
+        ID_VIEW_EOL,
+        ID_VIEW_EOF,
+        ID_VIEW_WHITESPACE,
+        ID_VIEW_CHANGES,
+    ] {
+        bar.enable_item(id, text_editor);
+    }
+    for i in 0..Wrap::ALL.len() {
+        bar.enable_item(ID_WRAP_BASE + i as i32, text_editor);
+    }
+    for i in 0..LineNumbers::ALL.len() {
+        bar.enable_item(ID_LINE_NUMBERS_BASE + i as i32, text_editor);
+    }
+    // 「文字コードを指定して開き直す」は保存済みのテキストのファイルだけ (図は常に UTF-8)
     for i in 0..Encoding::all().len().min(ENC_MAX as usize) {
-        bar.enable_item(ID_ENC_REOPEN_BASE + i as i32, has_path);
+        bar.enable_item(ID_ENC_REOPEN_BASE + i as i32, has_path && text_editor);
     }
     if let Some(view) = bar.get_menu(MENU_VIEW) {
-        let s = settings::get();
+        // エディタの項目は、今のタブの種別で有効な値 (全体の設定 + 種別ごとの上書き) を見せる
+        let s = match &tab {
+            Some(tab) => settings::get().for_filetype(tab.filetype()),
+            None => settings::get(),
+        };
         view.check_item(wrap_id(s.editor.wrap), true);
         if let Some(i) = LineNumbers::ALL
             .iter()
@@ -993,7 +1043,7 @@ fn update_dynamic_menus(win: &WindowRef) {
         view.check_item(ID_VIEW_WHITESPACE, s.editor.show_whitespace);
         view.check_item(ID_VIEW_TOOLBAR, s.general.show_toolbar);
         view.check_item(ID_VIEW_CHANGES, s.editor.highlight_changes);
-        let can_clear = tab.is_some() && s.editor.highlight_changes;
+        let can_clear = tab.is_some() && text_editor && s.editor.highlight_changes;
         view.enable_item(ID_CLEAR_CHANGES, can_clear);
         view.enable_item(ID_CLEAR_SAVED, can_clear);
         let (outline, preview, console) = tab
@@ -1032,19 +1082,55 @@ fn update_edit_menu(win: &WindowRef) {
         let target = tab.as_ref().map(|t| t.edit_target());
         editmenu::update_enabled(&edit, target.as_ref());
         // 改行コードの印を今の文書に合わせる (開き直し・Undo・保存ダイアログでも変わるので、開くたびに見る)
-        let current = tab.as_ref().map(|t| t.line_ending());
+        // 改行コードとタブの変換はテキストの文書だけ (図には無い)
+        let text_tab = tab.as_ref().filter(|t| !t.is_diagram());
+        let current = text_tab.map(|t| t.line_ending());
         for (i, eol) in LineEnding::ALL.iter().enumerate() {
             let id = ID_EOL_BASE + i as i32;
-            bar.enable_item(id, tab.is_some());
+            bar.enable_item(id, text_tab.is_some());
             bar.check_item(id, current == Some(*eol));
         }
-        bar.enable_item(ID_TABS_TO_SPACES, tab.is_some());
-        bar.enable_item(ID_SPACES_TO_TABS, tab.is_some());
+        bar.enable_item(ID_TABS_TO_SPACES, text_tab.is_some());
+        bar.enable_item(ID_SPACES_TO_TABS, text_tab.is_some());
     }
+}
+
+/// 図エディタ (WebView) にフォーカスがあるときに押されたショートカット。WebView の中のキーはフレームの
+/// アクセラレータに届かないので、ページが知らせてきた組み合わせをメニューの処理へ回す
+fn handle_key(win: &WindowRef, key: &str) {
+    let id = match key {
+        "ctrl+s" => ID_SAVE,
+        "ctrl+shift+s" => ID_SAVE_AS,
+        "ctrl+n" => ID_NEW,
+        "ctrl+shift+n" => ID_NEW_WINDOW,
+        "ctrl+o" => ID_OPEN,
+        "ctrl+w" => ID_CLOSE_TAB,
+        "ctrl+tab" | "ctrl+shift+tab" => {
+            // 次 / 前のタブへ (端では反対の端へ回る)
+            let (count, selected) = {
+                let w = win.borrow();
+                (w.tabs.len(), w.host.tabbar.selected())
+            };
+            if let (true, Some(i)) = (count > 1, selected) {
+                let next = if key == "ctrl+tab" {
+                    (i + 1) % count
+                } else {
+                    (i + count - 1) % count
+                };
+                select_tab(win, next);
+            }
+            return;
+        }
+        _ => return,
+    };
+    handle_menu(win, id);
 }
 
 /// 「指定行へ移動」のダイアログ
 fn goto_line_dialog(win: &WindowRef, tab: &Tab) {
+    if tab.is_diagram() {
+        return;
+    }
     let frame = win.borrow().frame;
     let last = tab.stc.get_line_count().max(1);
     let current = tab.stc.get_current_line() + 1;
@@ -1175,18 +1261,14 @@ fn handle_menu(win: &WindowRef, id: i32) {
             }
             update_dynamic_menus(win);
         }
-        ID_VIEW_RULER => change_settings(win, |s| s.editor.show_ruler = !s.editor.show_ruler),
-        ID_VIEW_EOL => change_settings(win, |s| s.editor.show_eol = !s.editor.show_eol),
-        ID_VIEW_EOF => change_settings(win, |s| s.editor.show_eof = !s.editor.show_eof),
-        ID_VIEW_WHITESPACE => change_settings(win, |s| {
-            s.editor.show_whitespace = !s.editor.show_whitespace
-        }),
+        ID_VIEW_RULER => change_editor(win, |e| e.show_ruler = !e.show_ruler),
+        ID_VIEW_EOL => change_editor(win, |e| e.show_eol = !e.show_eol),
+        ID_VIEW_EOF => change_editor(win, |e| e.show_eof = !e.show_eof),
+        ID_VIEW_WHITESPACE => change_editor(win, |e| e.show_whitespace = !e.show_whitespace),
         ID_VIEW_TOOLBAR => {
             change_settings(win, |s| s.general.show_toolbar = !s.general.show_toolbar)
         }
-        ID_VIEW_CHANGES => change_settings(win, |s| {
-            s.editor.highlight_changes = !s.editor.highlight_changes
-        }),
+        ID_VIEW_CHANGES => change_editor(win, |e| e.highlight_changes = !e.highlight_changes),
         ID_CLEAR_CHANGES | ID_CLEAR_SAVED => {
             if let Some(tab) = current {
                 tab.clear_change_marks(id == ID_CLEAR_SAVED);
@@ -1243,13 +1325,13 @@ fn handle_menu(win: &WindowRef, id: i32) {
         }
         id if (ID_WRAP_BASE..ID_WRAP_BASE + Wrap::ALL.len() as i32).contains(&id) => {
             let wrap = Wrap::ALL[(id - ID_WRAP_BASE) as usize];
-            change_settings(win, |s| s.editor.wrap = wrap);
+            change_editor(win, |e| e.wrap = wrap);
         }
         id if (ID_LINE_NUMBERS_BASE..ID_LINE_NUMBERS_BASE + LineNumbers::ALL.len() as i32)
             .contains(&id) =>
         {
             let value = LineNumbers::ALL[(id - ID_LINE_NUMBERS_BASE) as usize];
-            change_settings(win, |s| s.editor.line_numbers = value);
+            change_editor(win, |e| e.line_numbers = value);
         }
         id if EditItem::from_id(id).is_some() => {
             // 編集 (メニューバーとエディタの右クリックメニューの両方からここに来る)
@@ -1342,7 +1424,8 @@ fn reload_tab(win: &WindowRef, tab: &Tab) {
 /// 文字コードを指定して読み直す (未保存の変更があれば確認する)
 fn reopen_with_encoding(win: &WindowRef, tab: &Tab, encoding: Encoding) {
     let frame = win.borrow().frame;
-    if tab.doc.borrow().path.is_none() {
+    // 図 (.tbdg) は常に UTF-8 で読む
+    if tab.doc.borrow().path.is_none() || tab.is_diagram() {
         return;
     }
     if tab.is_modified() {
@@ -1534,7 +1617,7 @@ fn on_tab_changed(win: &WindowRef) {
     if let Some(tab) = tab {
         tab.update_title();
         tab.update_status();
-        tab.stc.set_focus();
+        tab.focus_editor();
     }
     update_dynamic_menus(win);
     check_external_changes(win);
@@ -1747,6 +1830,17 @@ impl Drop for ChecksPaused {
 /// 書き込みは別スレッドで行い (`background::run`)、長引けば進捗ダイアログを出す。ユーザーが
 /// 待つのをやめたら `pending_save` に受け口を残し、`poll_pending_saves` が後で結果を拾う。
 fn save_tab(win: &WindowRef, tab: &Tab, mode: SaveMode) -> bool {
+    // 図形の文字を入力している途中: まだ図に入っていないので、確定させてから保存し直す
+    // (確定の知らせはすぐ来る。来なくても少し待てば保存に進む)
+    let retry = {
+        let (win, tab) = (win.clone(), tab.clone());
+        move || {
+            save_tab(&win, &tab, mode);
+        }
+    };
+    if tab.commit_then(retry) {
+        return false;
+    }
     let frame = win.borrow().frame;
     let name = tab.doc.borrow().title();
     if tab.pending_save().borrow().is_some() {
@@ -1860,6 +1954,26 @@ fn ask_save_target(frame: &Frame, tab: &Tab) -> Option<(PathBuf, Encoding, Optio
             .map(|d| d.display().to_string());
         (doc.title(), dir, doc.filetype, doc.encoding)
     };
+    if tab.is_diagram() {
+        // 図は SVG なので文字コードは UTF-8 のまま、改行もそのまま。保存先だけ聞く
+        let mut builder = FileDialog::builder(frame)
+            .with_message(&tr("dialog.save_title"))
+            .with_default_file(&name)
+            .with_wildcard(&filetype.save_wildcard())
+            .with_style(FileDialogStyle::Save | FileDialogStyle::OverwritePrompt);
+        if let Some(dir) = dir {
+            builder = builder.with_default_dir(&dir);
+        }
+        let dialog = builder.build();
+        if dialog.show_modal() != ID_OK {
+            return None;
+        }
+        let mut path = PathBuf::from(dialog.get_path()?);
+        if path.extension().is_none() {
+            path.set_extension(filetype.extension());
+        }
+        return Some((path, Encoding::UTF8, None));
+    }
     // 一覧に無い文字コード (BOM 無しの UTF-16 や、推定で出た珍しいもの) はそのまま保てるように足す
     let mut encodings = Encoding::all();
     let selected = match encodings.iter().position(|e| *e == current) {
@@ -2000,6 +2114,15 @@ fn finish_save(win: &WindowRef, tab: &Tab, target: &SaveTarget) {
     apply_saved_target(tab, target);
     tab.mark_saved();
     tab.update_status();
+    if tab.is_diagram() {
+        // 図を取り込んでいる文書 (`#image("図.tbdg")`) のプレビューに、保存した図を反映する
+        for other in all_windows() {
+            let tabs = other.borrow().tabs.clone();
+            for t in tabs.iter().filter(|t| t.key() != tab.key()) {
+                t.linked_file_saved();
+            }
+        }
+    }
     if tab.backup_written().replace(false) {
         backup::remove(tab.backup_id());
     }
@@ -2116,6 +2239,16 @@ fn backup_tick(win: &WindowRef) {
 
 /// 未保存なら保存するか確認する。続行してよければ true
 fn confirm_discard(win: &WindowRef, tab: &Tab) -> bool {
+    // 図形の文字を入力している途中: 確定させるだけにして、閉じるのはやめる (確定した内容はこの後で届くので、
+    // 今は未保存かどうかが分からない)。もう一度閉じれば、未保存の確認が正しく出る
+    if tab.commit_then(|| {}) {
+        if let Some(i) = tab.index() {
+            select_tab(win, i);
+        }
+        let frame = win.borrow().frame;
+        status(&frame, &tr("status.diagram_committed"));
+        return false;
+    }
     let pending = tab.pending_save().borrow().is_some();
     if !pending && !tab.is_modified() {
         return true;
@@ -2154,6 +2287,19 @@ fn confirm_discard(win: &WindowRef, tab: &Tab) -> bool {
 /// タブを閉じる (未保存なら確認)。最後のタブを閉じたときは設定 `[general] last_tab` に従って
 /// 空のタブを 1 つ残すか、ウィンドウを閉じる (最後のウィンドウなら終了になる)
 fn close_tab(win: &WindowRef, tab: &Tab) -> bool {
+    // 図形の文字を入力している途中なら、確定させてから閉じ直す (未保存の確認はそのときに出る)
+    let retry = {
+        let (win, tab) = (win.clone(), tab.clone());
+        move || {
+            // 待っている間に別の操作で閉じられていたら何もしない
+            if tab.index().is_some() {
+                close_tab(&win, &tab);
+            }
+        }
+    };
+    if tab.commit_then(retry) {
+        return false;
+    }
     if !confirm_discard(win, tab) {
         return false;
     }
@@ -2452,6 +2598,13 @@ fn open_settings(win: &WindowRef) {
 }
 
 /// 設定を 1 か所変えて保存し、全ウィンドウに反映する (表示メニューからの変更用)
+/// 表示メニューからエディタ設定を変える。今のタブの種別で上書きされている項目 ([filetypes.*.editor]) は
+/// その上書きを、そうでない項目は全体の設定を変える (どちらでも、今のタブの表示が変わる)
+fn change_editor(win: &WindowRef, change: impl FnOnce(&mut settings::Editor)) {
+    let filetype = win.borrow().current_tab().map(|tab| tab.filetype());
+    change_settings(win, |s| s.change_editor_for(filetype, change));
+}
+
 fn change_settings(win: &WindowRef, change: impl FnOnce(&mut Settings)) {
     let before = settings::get();
     let mut after = before.clone();

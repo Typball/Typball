@@ -93,32 +93,62 @@ struct Session<'a> {
     main: Source,
     /// プロジェクトのルート (文書のあるフォルダ)。未保存の文書には無い
     root: Option<PathBuf>,
+    /// 本文の先頭に差し込んだ前置き ([`set_prelude_hook`]) の文字数。1 行目の診断の桁から引く
+    prelude_chars: usize,
+}
+
+/// 本文から前置きを作る関数 ([`set_prelude_hook`])
+type PreludeHook = Box<dyn Fn(&str) -> String + Send + Sync>;
+
+static PRELUDE_HOOK: OnceLock<PreludeHook> = OnceLock::new();
+
+/// コンパイルの前に、本文の先頭へ差し込む前置きを作る関数を登録する (最初の 1 回だけ有効)。
+///
+/// Typball が文書に機能を足すための仕組み。GUI 側は、Mermaid のコードブロックを描いた図に置き換える
+/// 表示ルール (`#show raw.where(lang: "mermaid"): ...`) をここから入れる。関数は本文を受け取り、
+/// 前置きの Typst の記述を返す (要らなければ空)。前置きは**改行を含めてはいけない**: 本文の 1 行目の前に
+/// そのままつなぐので、行番号はずれず、1 行目の桁だけがずれる (診断の桁は直して出す)。
+/// プレビュー・書き出し・プレビューウィンドウのどのコンパイルにも同じように効く
+pub fn set_prelude_hook(hook: impl Fn(&str) -> String + Send + Sync + 'static) {
+    let _ = PRELUDE_HOOK.set(Box::new(hook));
 }
 
 impl Engine {
     /// `source` を本文にした World を作る。`path` は文書の保存先 (未保存なら None)
     fn session(&self, source: &str, path: Option<&Path>) -> Session<'_> {
         let (root, id) = locate(path);
+        let prelude = PRELUDE_HOOK
+            .get()
+            .map(|hook| hook(source))
+            .filter(|p| !p.is_empty() && !p.contains('\n'));
+        let (text, prelude_chars) = match &prelude {
+            Some(prelude) => (
+                std::borrow::Cow::Owned(format!("{prelude}{source}")),
+                prelude.chars().count(),
+            ),
+            None => (std::borrow::Cow::Borrowed(source), 0),
+        };
         let main = {
             let mut main = self.main.lock();
             if main.id() == id {
-                main.replace(source);
+                main.replace(&text);
             } else {
-                *main = Source::new(id, source.to_string());
+                *main = Source::new(id, text.into_owned());
             }
             main.clone()
         };
-        self.resume(main, root)
+        self.resume(main, root, prelude_chars)
     }
 
     /// コンパイル済みの本文とルートから World を作り直す (書き出しのときの診断用)
-    fn resume(&self, main: Source, root: Option<PathBuf>) -> Session<'_> {
+    fn resume(&self, main: Source, root: Option<PathBuf>, prelude_chars: usize) -> Session<'_> {
         self.files.lock().begin();
         Session {
             eng: self,
             library: self.library.lock().clone(),
             main,
             root,
+            prelude_chars,
         }
     }
 }
@@ -342,11 +372,28 @@ fn embedded_cjk() -> impl Iterator<Item = (Font, FontInfo)> {
     })
 }
 
+/// 図 (.tbdg) の文字に使うフォント名。中身は同梱の Noto Sans JP (Regular / Bold) で、名前だけが違う。
+///
+/// SVG の中の文字を「Noto Sans JP」で指定すると、OS に可変フォント版 (Windows 11 の NotoSansJP-VF.ttf) が
+/// あるとき Typst はそちらを選ぶ (同点なら可変フォントを優先する)。ところが SVG の文字は可変フォントの
+/// 太さを指定せずに描かれるので、既定の Thin になってしまう (typst 0.15 で確認)。OS のフォントと
+/// 重ならない名前にしておけば、必ず同梱の Regular / Bold で描かれる
+pub const DIAGRAM_FONT_FAMILY: &str = "Typball Sans";
+
+/// 同梱フォントを [`DIAGRAM_FONT_FAMILY`] の名前でも引けるようにする
+fn embedded_cjk_alias() -> impl Iterator<Item = (Font, FontInfo)> {
+    embedded_cjk().map(|(font, mut info)| {
+        info.family = DIAGRAM_FONT_FAMILY.to_string();
+        (font, info)
+    })
+}
+
 fn engine() -> &'static Engine {
     ENGINE.get_or_init(|| {
         let mut fonts = FontStore::new();
         fonts.extend(typst_kit::fonts::embedded());
         fonts.extend(embedded_cjk());
+        fonts.extend(embedded_cjk_alias());
         let system: Vec<_> = typst_kit::fonts::system().collect();
         let mut families: BTreeMap<String, bool> = BTreeMap::new();
         for (_, info) in &system {
@@ -399,6 +446,7 @@ fn compile_document(source: &str, path: Option<&Path>) -> (Option<Document>, Vec
                 doc,
                 main: world.main,
                 root: world.root,
+                prelude_chars: world.prelude_chars,
             };
             (Some(doc), diagnostics)
         }
@@ -493,6 +541,8 @@ pub struct Document {
     /// コンパイルした本文とルート (書き出しで出た診断の位置を求めるのに使う)
     main: Source,
     root: Option<PathBuf>,
+    /// 本文の先頭に差し込んだ前置きの文字数 (診断の桁を直すのに使う)
+    prelude_chars: usize,
 }
 
 /// PDF の書き出し設定
@@ -628,7 +678,7 @@ impl Document {
             tagged: settings.tagged || settings.pdfua,
             ..Default::default()
         };
-        let world = engine().resume(self.main.clone(), self.root.clone());
+        let world = engine().resume(self.main.clone(), self.root.clone(), self.prelude_chars);
         typst_pdf::pdf(&self.doc, &options).map_err(|errs| {
             errs.iter()
                 .map(|d| format_diag(&world, d, "error"))
@@ -702,6 +752,12 @@ fn diag_location(world: &Session, span: DiagSpan) -> Option<String> {
     let start = world.range(span)?.start;
     if id == world.main.id() {
         let (line, col) = world.main.lines().byte_to_line_column(start)?;
+        // 1 行目の前には前置きがつないである: その分を桁から引く (前置きの中の位置なら 1 桁目にする)
+        let col = if line == 0 {
+            col.saturating_sub(world.prelude_chars)
+        } else {
+            col
+        };
         return Some(format!("{}:{}: ", line + 1, col + 1));
     }
     let name = id.vpath().get_without_slash();
@@ -786,6 +842,19 @@ mod tests {
         assert!(book.contains_family("noto sans jp"));
         // Regular と Bold の両方 (システムに同名のフォントがあればさらに増える)
         assert!(book.select_family("noto sans jp").count() >= 2);
+    }
+
+    /// 図の文字用の別名は、同梱の Regular と Bold だけを指す (OS の可変フォントが混ざらない)
+    #[test]
+    fn diagram_font_alias_points_at_the_embedded_statics() {
+        let book = engine().fonts.book();
+        let family = DIAGRAM_FONT_FAMILY.to_lowercase();
+        let ids: Vec<usize> = book.select_family(&family).collect();
+        assert_eq!(ids.len(), 2);
+        for id in ids {
+            let info = book.info(id).unwrap();
+            assert!(!info.flags.contains(FontFlags::VARIABLE));
+        }
     }
 
     #[test]

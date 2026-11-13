@@ -66,6 +66,8 @@ en.AssocTyp=Open .typ (Typst) files with {#AppName}
 ja.AssocTyp=.typ (Typst) ファイルを {#AppName} で開く
 en.AssocMd=Open .md (Markdown) files with {#AppName}
 ja.AssocMd=.md (Markdown) ファイルを {#AppName} で開く
+en.AssocTbdg=Open .tbdg (diagram) files with {#AppName}
+ja.AssocTbdg=.tbdg (図) ファイルを {#AppName} で開く
 en.VerbOpen=Open with {#AppName}
 ja.VerbOpen={#AppName} で開く
 en.VerbEdit=Edit with {#AppName}
@@ -81,6 +83,7 @@ ja.WebView2Failed=WebView2 ランタイムをインストールできません�
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; Flags: unchecked
 Name: "assoc_typ"; Description: "{cm:AssocTyp}"
 Name: "assoc_md"; Description: "{cm:AssocMd}"; Flags: unchecked
+Name: "assoc_tbdg"; Description: "{cm:AssocTbdg}"
 
 [Files]
 Source: "{#SourceDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
@@ -98,7 +101,7 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 Root: HKA; Subkey: "Software\Classes\.typ\OpenWithProgids"; ValueType: string; ValueName: "Typball.typ"; ValueData: ""; Flags: uninsdeletevalue; Tasks: assoc_typ
 Root: HKA; Subkey: "Software\Classes\.typ"; ValueType: string; ValueName: ""; ValueData: "Typball.typ"; Flags: uninsdeletevalue; Tasks: assoc_typ
 Root: HKA; Subkey: "Software\Classes\Typball.typ"; ValueType: string; ValueName: ""; ValueData: "Typst Document"; Flags: uninsdeletekey; Tasks: assoc_typ
-; 書類のアイコンは exe に埋め込んだもの (crates/typball/assets/icons/typball.rc)。負の数はリソース ID (101=.typ, 102=.md)
+; 書類のアイコンは exe に埋め込んだもの (crates/typball/assets/icons/typball.rc)。負の数はリソース ID (101=.typ, 102=.md, 104=.tbdg)
 Root: HKA; Subkey: "Software\Classes\Typball.typ\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExe},-101"; Tasks: assoc_typ
 ; ダブルクリック (open) は引数無しで渡し、設定 [filetypes.*] open_mode に従ってエディタかプレビューウィンドウで開く。
 ; 右クリックには「{#AppName} で編集」(--edit) と「{#AppName} でプレビュー」(--view) も出す
@@ -122,6 +125,18 @@ Root: HKA; Subkey: "Software\Classes\Typball.md\shell\edit"; ValueType: string; 
 Root: HKA; Subkey: "Software\Classes\Typball.md\shell\edit\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" --edit ""%1"""; Tasks: assoc_md
 Root: HKA; Subkey: "Software\Classes\Typball.md\shell\view"; ValueType: string; ValueName: ""; ValueData: "{cm:VerbView}"; Tasks: assoc_md
 Root: HKA; Subkey: "Software\Classes\Typball.md\shell\view\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" --view ""%1"""; Tasks: assoc_md
+; 図 (.tbdg)。Typball の図エディタの形式なので、既定で関連付ける。右クリックの項目は .typ / .md と同じ
+Root: HKA; Subkey: "Software\Classes\.tbdg\OpenWithProgids"; ValueType: string; ValueName: "Typball.tbdg"; ValueData: ""; Flags: uninsdeletevalue; Tasks: assoc_tbdg
+Root: HKA; Subkey: "Software\Classes\.tbdg"; ValueType: string; ValueName: ""; ValueData: "Typball.tbdg"; Flags: uninsdeletevalue; Tasks: assoc_tbdg
+Root: HKA; Subkey: "Software\Classes\Typball.tbdg"; ValueType: string; ValueName: ""; ValueData: "Typball Diagram"; Flags: uninsdeletekey; Tasks: assoc_tbdg
+Root: HKA; Subkey: "Software\Classes\Typball.tbdg\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExe},-104"; Tasks: assoc_tbdg
+Root: HKA; Subkey: "Software\Classes\Typball.tbdg\shell"; ValueType: string; ValueName: ""; ValueData: "open"; Tasks: assoc_tbdg
+Root: HKA; Subkey: "Software\Classes\Typball.tbdg\shell\open"; ValueType: string; ValueName: ""; ValueData: "{cm:VerbOpen}"; Tasks: assoc_tbdg
+Root: HKA; Subkey: "Software\Classes\Typball.tbdg\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc_tbdg
+Root: HKA; Subkey: "Software\Classes\Typball.tbdg\shell\edit"; ValueType: string; ValueName: ""; ValueData: "{cm:VerbEdit}"; Tasks: assoc_tbdg
+Root: HKA; Subkey: "Software\Classes\Typball.tbdg\shell\edit\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" --edit ""%1"""; Tasks: assoc_tbdg
+Root: HKA; Subkey: "Software\Classes\Typball.tbdg\shell\view"; ValueType: string; ValueName: ""; ValueData: "{cm:VerbView}"; Tasks: assoc_tbdg
+Root: HKA; Subkey: "Software\Classes\Typball.tbdg\shell\view\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" --view ""%1"""; Tasks: assoc_tbdg
 ; 「プログラムから開く」の一覧に出す (関連付けのタスクを選ばなくても)
 Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "{#AppName}"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""
@@ -132,6 +147,7 @@ Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}\shell\view\command";
 Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}\SupportedTypes"; ValueType: string; ValueName: ".typ"; ValueData: ""
 Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}\SupportedTypes"; ValueType: string; ValueName: ".md"; ValueData: ""
 Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}\SupportedTypes"; ValueType: string; ValueName: ".txt"; ValueData: ""
+Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}\SupportedTypes"; ValueType: string; ValueName: ".tbdg"; ValueData: ""
 
 [Run]
 ; 対話インストールの最後に起動する。自動更新 (サイレント) では Typball 側のバッチが起動し直す

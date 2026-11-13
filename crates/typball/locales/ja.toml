@@ -109,12 +109,14 @@ replace = "置換 (Ctrl+H)"
 txt = "テキスト (.txt)"
 md = "Markdown (.md)"
 typ = "Typst (.typ)"
+tbdg = "図 (.tbdg)"
 
 # ステータスバーに出す短い名前
 [filetype.short]
 txt = "Text"
 md = "Markdown"
 typ = "Typst"
+tbdg = "図"
 
 [document]
 # 新規文書の名前。設定で番号を付けると "無題-1.txt" になる
@@ -202,6 +204,7 @@ busy_cancel = "待つのをやめる"
 
 [status]
 ok = "OK"
+diagram_committed = "入力中の文字を確定しました。もう一度操作してください"
 position = "{line} 行, {col} 桁"
 chars = "{n} 文字"
 saved = "保存しました: {path}"
@@ -257,6 +260,11 @@ third_party = """
     Expat — MIT
     PCRE2 — BSD-3-Clause
     Microsoft Edge WebView2 SDK — BSD-3-Clause
+・maxGraph (図エディタ) — Apache License 2.0
+・図エディタのアイコン
+    Affinity (ネットワーク機器の記号) — The Unlicense (パブリックドメイン)
+    isoflow の立体アイコン — MIT
+・Mermaid (Markdown と Typst の中の Mermaid の図) — MIT
 ・Rust のライブラリ (約 380 個) — MIT・Apache-2.0 ほか、それぞれのライセンス
 
 This software is based in part on the work of the Independent JPEG Group.
@@ -334,6 +342,7 @@ show_eof = "ファイルの終わり (EOF)"
 show_whitespace = "空白とタブ"
 
 [settings.files]
+diagram_intro = "図 (.tbdg) は図エディタで開きます。テキストのエディタの設定や、ペイン・雛形の設定はありません。"
 title = "ファイル"
 default_filetype = "新規タブの形式:"
 external_change = "外部で変更されたとき:"
@@ -364,6 +373,16 @@ open_note = "ダブルクリックやコマンドラインでファイルを渡�
 open_in_viewer = "プレビューウィンドウで開く"
 template_note = "{name} の新しいファイルの雛形 (Ctrl+N と、起動時に開く新規タブの中身):"
 template_reset = "既定に戻す(&R)"
+
+[settings.override]
+button = "エディタ設定を上書き(&E)..."
+none = "上書きなし (「エディタ」の設定のまま)"
+some = "上書き: {items}"
+title = "{name} のエディタ設定"
+# 日本語は空白が無いと wx が折り返せないので、文の切れ目に改行を入れておく
+intro = "{name} のファイルだけ、エディタの設定を変えます。\nチェックを入れた項目だけがここの値になり、チェックの無い項目は\n「設定 → エディタ」の値 (既定値) のままです。"
+check_tip = "チェックを入れると、この種別だけこの項目を上書きします"
+clear = "すべて既定値に戻す(&R)"
 
 [find]
 label = "検索:"
@@ -551,3 +570,7 @@ note = "GitHub の Releases ({url}) を見に行きます。\nネットワーク
 system = "システムに従う"
 light = "ライト"
 dark = "ダーク"
+
+[diagram]
+# 図エディタ (.tbdg)。図の中の文言はページ側 (assets/diagram/diagram.js) にある
+webview_missing = "WebView2 ランタイムが見つからないため、図エディタを表示できません。Microsoft Edge WebView2 ランタイムをインストールしてください。ファイルの中身は変更されません。"

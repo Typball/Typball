@@ -18,6 +18,7 @@ use std::rc::Rc;
 use wxdragon::id::ID_HIGHEST;
 use wxdragon::prelude::*;
 
+use crate::diagram::DiagramEditor;
 use crate::webpreview::WebPreview;
 
 use crate::actions::Action;
@@ -49,6 +50,8 @@ pub enum EditTarget {
     /// Markdown プレビューの WebView。読み取り専用なので使えるのはコピーとすべて選択だけ。
     /// WebView の CanCopy / Copy などは使わない (wx の同期 RunScript で固まることがある。webpreview.rs)
     Web(Rc<WebPreview>),
+    /// 図エディタ (.tbdg)。図形に対する操作になる。状態はページからの知らせで分かる
+    Diagram(Rc<DiagramEditor>),
 }
 
 impl EditItem {
@@ -118,6 +121,7 @@ impl EditItem {
                 Self::SelectAll => true,
                 _ => false,
             },
+            EditTarget::Diagram(diagram) => diagram.can(self),
         }
     }
 
@@ -138,6 +142,7 @@ impl EditItem {
                 Self::SelectAll => web.select_all(),
                 _ => {}
             },
+            EditTarget::Diagram(diagram) => diagram.apply(self),
         }
     }
 }

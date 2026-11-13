@@ -12,6 +12,8 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 
+use crate::filetype::FileType;
+
 use serde::{Deserialize, Serialize};
 
 /// 設定ファイル名。実行ファイルと同じフォルダにこの名前のファイルがあればそれを優先する
@@ -520,6 +522,67 @@ impl Default for Editor {
     }
 }
 
+/// [`EditorOverride`] を作る。項目は [`Editor`] と同じ名前・同じ型で、どれも「書かれていなければ全体の設定のまま」
+macro_rules! editor_override {
+    ($($field:ident: $ty:ty),* $(,)?) => {
+        /// 種別ごとのエディタ設定の上書き (`[filetypes.md.editor]` など)。
+        ///
+        /// 「設定 → エディタ」の値 ([`Editor`]) は既定値として働き、ここに書かれた項目だけが、その種別のタブで
+        /// 既定値に勝つ (Markdown だけタブ幅を 2 にする、など)。配色 (`theme`) は種別ごとには変えられない。
+        /// 項目を足すときは、下の `editor_override!` に 1 行足す (設定画面の欄は settings_dialog.rs の `EditorForm`)
+        #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+        #[serde(default)]
+        pub struct EditorOverride {
+            $(pub $field: Option<$ty>,)*
+        }
+
+        impl EditorOverride {
+            /// 上書きされている項目を `editor` に入れる
+            pub fn apply(&self, editor: &mut Editor) {
+                $(if let Some(value) = &self.$field {
+                    editor.$field = value.clone();
+                })*
+            }
+
+            /// 何も上書きしていないか
+            pub fn is_empty(&self) -> bool {
+                true $(&& self.$field.is_none())*
+            }
+
+            /// `before` から `after` へ変わった項目を書き戻す: 上書きされている項目は上書きへ、
+            /// そうでない項目は全体の設定 (`base`) へ
+            fn absorb(&mut self, base: &mut Editor, before: &Editor, after: &Editor) {
+                $(if after.$field != before.$field {
+                    if self.$field.is_some() {
+                        self.$field = Some(after.$field.clone());
+                    } else {
+                        base.$field = after.$field.clone();
+                    }
+                })*
+            }
+        }
+    };
+}
+
+editor_override! {
+    font_face: String,
+    font_size: i32,
+    line_spacing: i32,
+    tab_width: i32,
+    use_tabs: bool,
+    backspace: Backspace,
+    wrap: Wrap,
+    wrap_column: i32,
+    line_numbers: LineNumbers,
+    highlight_changes: bool,
+    saved_changes: SavedChanges,
+    show_ruler: bool,
+    ruler_tabs: RulerTabs,
+    show_eol: bool,
+    show_eof: bool,
+    show_whitespace: bool,
+}
+
 /// ファイルの開き方・保存のしかた
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -687,6 +750,9 @@ pub struct PanesOverride {
     pub pane_sizes: PaneSizes,
     /// 新しいファイル (Ctrl+N、起動時の新規タブ) の雛形。None なら言語ごとの既定 (`FileType::default_template`)
     pub template: Option<String>,
+    /// この種別だけのエディタ設定 (`[filetypes.md.editor]`)。書かれた項目だけが全体の設定に勝つ
+    #[serde(skip_serializing_if = "EditorOverride::is_empty")]
+    pub editor: EditorOverride,
 }
 
 impl PanesOverride {
@@ -727,6 +793,8 @@ pub struct FileTypes {
     pub txt: PanesOverride,
     pub md: PanesOverride,
     pub typ: PanesOverride,
+    /// 図 (.tbdg)。ペインは無いので、使うのは開き方くらい
+    pub tbdg: PanesOverride,
 }
 
 /// メインウィンドウの位置とサイズ (終了時に保存し、次回起動時に復元する。winplace.rs)
@@ -763,6 +831,40 @@ pub fn path() -> PathBuf {
 }
 
 impl Settings {
+    /// この種別のタブで有効なエディタ設定 (全体の設定に、種別ごとの上書きを重ねたもの)
+    pub fn editor_for(&self, filetype: FileType) -> Editor {
+        let mut editor = self.editor.clone();
+        filetype.overrides(self).editor.apply(&mut editor);
+        editor
+    }
+
+    /// `editor` を、この種別のタブで有効な値に入れ替えた設定。**読むためだけに使う** (これを保存したり
+    /// [`set`] したりすると、上書きの値が全体の設定に入ってしまう)。2 回通しても結果は同じ
+    pub fn for_filetype(mut self, filetype: FileType) -> Settings {
+        self.editor = self.editor_for(filetype);
+        self
+    }
+
+    /// エディタ設定を変える (表示メニューの「折り返し」など)。`filetype` のタブで有効な値を `change` に渡し、
+    /// 変わった項目を、その種別で上書きされていれば上書きへ、そうでなければ全体の設定へ書く。
+    /// どちらに書いても、いま見ているタブの表示は変わる
+    pub fn change_editor_for(
+        &mut self,
+        filetype: Option<FileType>,
+        change: impl FnOnce(&mut Editor),
+    ) {
+        let Some(filetype) = filetype else {
+            change(&mut self.editor);
+            return;
+        };
+        let before = self.editor_for(filetype);
+        let mut after = before.clone();
+        change(&mut after);
+        let mut overrides = filetype.overrides(self).editor;
+        overrides.absorb(&mut self.editor, &before, &after);
+        filetype.overrides_mut(self).editor = overrides;
+    }
+
     /// ファイルから読み込む。ファイルが無ければ既定値。
     /// 壊れていて読めない場合は既定値と一緒にエラーメッセージを返す (上書き保存で復旧できる)。
     pub fn load() -> (Settings, Option<String>) {
@@ -809,6 +911,63 @@ pub fn set(s: Settings) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editor_override_wins_only_where_written() {
+        let mut s = Settings::default();
+        s.editor.tab_width = 4;
+        s.editor.wrap_column = 100;
+        s.filetypes.md.editor.tab_width = Some(2);
+        assert_eq!(s.editor_for(FileType::Md).tab_width, 2);
+        assert_eq!(s.editor_for(FileType::Md).wrap_column, 100);
+        assert_eq!(s.editor_for(FileType::Typ).tab_width, 4);
+        // 読むための設定は、2 回通しても同じ
+        let once = s.clone().for_filetype(FileType::Md);
+        assert_eq!(once.clone().for_filetype(FileType::Md), once);
+        assert_eq!(once.editor.tab_width, 2);
+    }
+
+    #[test]
+    fn editor_override_round_trips_and_is_omitted_when_empty() {
+        let mut s = Settings::default();
+        let plain = toml::to_string_pretty(&s).unwrap();
+        assert!(!plain.contains("[filetypes.md.editor]"), "{plain}");
+        s.filetypes.md.editor.tab_width = Some(2);
+        s.filetypes.md.editor.use_tabs = Some(true);
+        let text = toml::to_string_pretty(&s).unwrap();
+        assert!(text.contains("[filetypes.md.editor]"), "{text}");
+        assert!(!text.contains("[filetypes.typ.editor]"), "{text}");
+        let back: Settings = toml::from_str(&text).unwrap();
+        assert_eq!(back, s);
+        // 手で一部だけ書いた設定も読める
+        let partial: Settings =
+            toml::from_str("[filetypes.txt.editor]\nwrap = \"none\"\n").unwrap();
+        assert_eq!(partial.filetypes.txt.editor.wrap, Some(Wrap::None));
+        assert_eq!(partial.editor_for(FileType::Txt).wrap, Wrap::None);
+        assert_eq!(
+            partial.editor_for(FileType::Md).wrap,
+            Settings::default().editor.wrap
+        );
+    }
+
+    #[test]
+    fn changing_an_editor_setting_goes_to_the_override_when_there_is_one() {
+        let mut s = Settings::default();
+        s.editor.show_ruler = true;
+        s.editor.wrap = Wrap::Window;
+        s.filetypes.md.editor.wrap = Some(Wrap::None);
+        // Markdown のタブで折り返しを変える: 上書きされている項目なので、上書きが変わる
+        s.change_editor_for(Some(FileType::Md), |e| e.wrap = Wrap::Column);
+        assert_eq!(s.filetypes.md.editor.wrap, Some(Wrap::Column));
+        assert_eq!(s.editor.wrap, Wrap::Window);
+        // ルーラーは上書きされていないので、全体の設定が変わる
+        s.change_editor_for(Some(FileType::Md), |e| e.show_ruler = !e.show_ruler);
+        assert!(!s.editor.show_ruler);
+        assert_eq!(s.filetypes.md.editor.show_ruler, None);
+        // タブが無いときは全体の設定
+        s.change_editor_for(None, |e| e.wrap = Wrap::None);
+        assert_eq!(s.editor.wrap, Wrap::None);
+    }
 
     #[test]
     fn backspace_modes_remove_spaces_up_to_a_tab_stop() {

@@ -9,6 +9,12 @@
 - Typst: Apache License 2.0 (typst-assets に入っている同じ全文を使う)
 - wxWidgets と、wxWidgets が内蔵するライブラリ (Scintilla / Lexilla・libpng・zlib・libjpeg・libtiff・Expat・
   NanoSVG・PCRE2・WebView2 SDK): ビルドで展開された wxWidgets のソース (target/release/wxWidgets か WXWIDGETS_DIR)
+- maxGraph (図エディタ): crates/typball/assets/diagram/LICENSE-maxGraph.txt (npm の配布物に入っている LICENSE)。
+  版は同じフォルダの maxgraph.esm.min.js の先頭のコメントから読む
+- 図エディタのアイコン (ネットワーク図の機器): crates/typball/assets/diagram/icons/ の LICENSE-affinity.txt
+  (Affinity、Unlicense) と LICENSE-isoflow.txt (isoflow の isopack、MIT)。取得は tools/fetch_diagram_icons.py
+- Mermaid (Markdown と Typst の中の Mermaid を描く): crates/typball/assets/mermaid/LICENSE-mermaid.txt。
+  版は crates/typball/src/webpreview.rs の「Mermaid x.y.z」の行から読む
 - Rust クレート: cargo metadata で typball / typball-core から通常の依存 (build / dev 依存は除く) をたどり、
   ~/.cargo/registry に展開された各クレートの LICENSE* / COPYING* / NOTICE* を集める。
   "MIT OR Apache-2.0" のように選べるものは MIT の全文だけを載せる。同じ全文は 1 回だけ載せてクレートを並べる
@@ -158,6 +164,11 @@ def main():
         wx_ver.split(f"#define {k}")[1].split()[0] for k in ("wxMAJOR_VERSION", "wxMINOR_VERSION", "wxRELEASE_NUMBER")
     )
     crates, groups, missing = rust_crates(meta)
+    diagram_dir = os.path.join(ROOT, "crates", "typball", "assets", "diagram")
+    with open(os.path.join(ROOT, "crates", "typball", "src", "webpreview.rs"), encoding="utf-8") as src:
+        mermaid_ver = re.search(r"/// Mermaid ([0-9][0-9A-Za-z.\-]*) \(MIT\)", src.read()).group(1)
+    with open(os.path.join(diagram_dir, "maxgraph.esm.min.js"), encoding="utf-8") as bundle:
+        maxgraph_ver = re.search(r"@maxgraph/core@([0-9][0-9A-Za-z.\-]*)/", bundle.read(1000)).group(1)
 
     # wxWidgets が内蔵して静的リンクしているライブラリ (wxUSE_* = builtin) と WebView2 SDK
     jpeg_readme = read(os.path.join(wx, "src", "jpeg", "README"))
@@ -212,6 +223,11 @@ def main():
         "     or under Apache-2.0 when the crate does not ship the MIT text.",
         "     選べるライセンス (\"MIT OR Apache-2.0\" など) のクレートは MIT で (MIT の全文が無いものは Apache-2.0 で) 利用しています。",
         "     Source code of every crate is available at the crates.io URL listed with it.",
+        f"  7. maxGraph {maxgraph_ver} (diagram editor) .......... Apache License 2.0",
+        "  8. Icons for network diagrams (diagram editor)",
+        "     - Affinity network symbols ............. The Unlicense (public domain)",
+        "     - Isoflow isometric icons .............. MIT",
+        f"  9. Mermaid {mermaid_ver} ........................... MIT",
         "",
     ]
 
@@ -260,6 +276,36 @@ def main():
             parts.extend(["", "   The following are used under the license named in their metadata, which requires no notice:"])
             parts.extend(crate_line(p) for p in others)
         parts.append("")
+
+    section(
+        f"7. maxGraph {maxgraph_ver} (https://github.com/maxGraph/maxGraph)\n"
+        "   Copyright 2021-present The maxGraph project Contributors\n"
+        "   Copyright (c) 2006-2015, JGraph Ltd\n"
+        "   Copyright (c) 2006-2015, Gaudenz Alder\n"
+        "   Licensed under the Apache License, Version 2.0. Typball embeds the unmodified single-file build of\n"
+        f"   the npm package @maxgraph/core {maxgraph_ver} (https://www.npmjs.com/package/@maxgraph/core).",
+        read(os.path.join(diagram_dir, "LICENSE-maxGraph.txt")),
+    )
+
+    icons_dir = os.path.join(diagram_dir, "icons")
+    section(
+        "8.1 Affinity - network equipment symbols (https://github.com/ecceman/affinity)\n"
+        "   Released into the public domain (The Unlicense). Typball bundles the \"naked\", \"circle\" (blue) and\n"
+        "   \"square\" (blue) SVG icons unmodified, and recolors them when a diagram asks for another color.",
+        read(os.path.join(icons_dir, "LICENSE-affinity.txt")),
+    )
+    section(
+        "8.2 Isoflow isometric icons (https://github.com/markmanx/isopacks, collections/isoflow)\n"
+        "   Typball bundles the SVG icons of the \"isoflow\" collection unmodified.",
+        read(os.path.join(icons_dir, "LICENSE-isoflow.txt")),
+    )
+
+    section(
+        f"9. Mermaid {mermaid_ver} (https://github.com/mermaid-js/mermaid)\n"
+        "   Typball embeds the unmodified single-file build (dist/mermaid.min.js) of the npm package mermaid.\n"
+        "   That build also contains the libraries Mermaid depends on, under their own licenses.",
+        read(os.path.join(ROOT, "crates", "typball", "assets", "mermaid", "LICENSE-mermaid.txt")),
+    )
 
     with open(OUT, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(parts).rstrip("\n") + "\n")

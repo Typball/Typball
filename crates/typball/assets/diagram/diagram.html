@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; connect-src 'self'; form-action 'none'">
+<title>Typball Diagram</title>
+<link rel="stylesheet" href="/assets/diagram/diagram.css">
+<script type="module" src="/assets/diagram/diagram.js"></script>
+</head>
+<body>
+<div id="app">
+  <div id="toolbar"></div>
+  <div id="main">
+    <div id="palette"></div>
+    <div id="stage">
+      <div id="canvas">
+        <div id="graph" tabindex="0"></div>
+        <textarea id="ime-catcher" tabindex="-1" autocomplete="off" spellcheck="false" aria-hidden="true"></textarea>
+        <div id="notice" hidden></div>
+      </div>
+      <div id="code" hidden>
+        <div id="code-bar">
+          <span id="code-title">Mermaid</span>
+          <span id="code-hint"></span>
+          <select id="code-format" class="tb-select" hidden></select>
+          <button id="code-copy" class="code-btn" type="button"></button>
+          <button id="code-copy-md" class="code-btn" type="button"></button>
+        </div>
+        <div id="switch-bar" hidden></div>
+        <textarea id="code-text" readonly spellcheck="false" wrap="off"></textarea>
+        <div id="port-table" hidden></div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

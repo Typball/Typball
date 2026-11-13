@@ -40,6 +40,7 @@ mod appicon;
 mod assoc;
 mod background;
 mod backup;
+mod diagram;
 #[cfg(windows)]
 mod dnd_win;
 mod document;
@@ -59,6 +60,7 @@ mod instance;
 mod marks;
 mod mdhtml;
 mod mdstyle;
+mod mermaid;
 mod outline;
 mod pane;
 mod preview;
@@ -181,6 +183,12 @@ fn main() {
     std::thread::spawn(typball_core::warm_up);
     // コードの色付け用の構文定義の読み込みも同様
     std::thread::spawn(mdhtml::warm_up);
+    // Typst の文書の中の Mermaid: コンパイルに表示ルールを差し込み、図が描けたらプレビューを組み直す
+    mermaid::install();
+    mermaid::on_rendered(|| {
+        window::rerender_typst();
+        viewer::rerender_typst();
+    });
     let _ = wxdragon::main(move |app| {
         // macOS: Finder でファイルを開く (関連付けのダブルクリック、Dock へのドロップ) と、引数ではなく
         // Apple イベントで届く。起動のきっかけになったファイルも、ウィンドウを作った後にここへ届く。

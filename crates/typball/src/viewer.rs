@@ -42,6 +42,8 @@ pub struct Viewer {
     doc: RefCell<Document>,
     text: RefCell<String>,
     content: Content,
+    /// 中身の置き場 (Mermaid を描く見えない WebView もここに置く)
+    body: Panel,
     /// 外部変更の監視
     _watch: Timer<Frame>,
 }
@@ -135,7 +137,8 @@ impl Viewer {
 
         let body = Panel::builder(&frame).build();
         let content = match doc.filetype {
-            FileType::Typ => {
+            // 図は、図を 1 ページに置いた Typst の文書として描く (render)
+            FileType::Typ | FileType::Tbdg => {
                 let view = TypstView::new(&body, frame);
                 fill(&body, &view.container);
                 Content::Typst(view)
@@ -179,6 +182,7 @@ impl Viewer {
             doc: RefCell::new(doc),
             text: RefCell::new(text),
             content,
+            body,
             _watch: Timer::new(&frame),
         });
         VIEWERS.with(|v| v.borrow_mut().push(viewer.clone()));
@@ -216,6 +220,7 @@ impl Viewer {
             let weak = weak.clone();
             move |event| {
                 if let Some(v) = weak.upgrade() {
+                    crate::mermaid::release(&v.body);
                     VIEWERS.with(|list| list.borrow_mut().retain(|x| !Rc::ptr_eq(x, &v)));
                 }
                 event.skip(true);
@@ -263,9 +268,14 @@ impl Viewer {
     fn render(&self) {
         let text = self.text.borrow().clone();
         match &self.content {
+            Content::Typst(view) if self.doc.borrow().filetype.is_diagram() => {
+                view.render(&crate::diagram::typst_source(&text), None);
+            }
             Content::Typst(view) => {
                 let path = self.doc.borrow().path.clone();
                 view.render(&text, path.as_deref());
+                // 文書の中の Mermaid を描かせる (描けたら rerender_typst で組み直す)
+                crate::mermaid::render_pending(&self.body);
             }
             Content::Web(web) => {
                 let path = self.doc.borrow().path.clone();
@@ -346,6 +356,16 @@ pub fn apply_settings(before: &settings::Settings, after: &settings::Settings) {
                 crate::textctrl::apply_tab_width(ctrl, after, crate::textctrl::preview_tab_width);
             }
             _ => {}
+        }
+    }
+}
+
+/// Typst の文書を開いているプレビューウィンドウを組み直す (文書の中の Mermaid が描けたとき)
+pub fn rerender_typst() {
+    let viewers: Vec<Rc<Viewer>> = VIEWERS.with(|v| v.borrow().clone());
+    for viewer in viewers {
+        if viewer.doc.borrow().filetype == FileType::Typ {
+            viewer.render();
         }
     }
 }

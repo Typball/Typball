@@ -129,6 +129,7 @@ fn document_icon_id(kind: Kind) -> i32 {
         Kind::Typ => 101,
         Kind::Md => 102,
         Kind::Txt => 103,
+        Kind::Tbdg => 104,
     }
 }
 
@@ -264,7 +265,7 @@ impl Reg {
         let apps = self.applications_key(exe);
         set(&apps, "FriendlyAppName", APP_NAME)?;
         write_verbs(&format!(r"{apps}\shell"), true, labels, exe)?;
-        for k in [Kind::Typ, Kind::Md, Kind::Txt] {
+        for k in Kind::ALL {
             set(
                 &format!(r"{apps}\SupportedTypes"),
                 &format!(".{}", k.ext()),
@@ -347,7 +348,7 @@ impl Reg {
             &format!(".{}", kind.ext()),
         );
         // どの形式も登録が残っていなければ、アプリとしての登録も片付ける
-        let none_left = [Kind::Txt, Kind::Md, Kind::Typ]
+        let none_left = Kind::ALL
             .iter()
             .all(|k| !key_exists(HKEY_CURRENT_USER, &self.class(*k)));
         if none_left {
@@ -836,6 +837,27 @@ mod tests {
             t.get(r"Classes\Typball.txt\DefaultIcon", "").as_deref(),
             Some(r"Z:\apps\Typball\Typball.exe,-103")
         );
+    }
+
+    #[test]
+    fn diagrams_register_like_the_installer() {
+        let t = TestReg::new();
+        t.reg
+            .register(Kind::Tbdg, &Icon::Document, &labels(), Path::new(EXE))
+            .unwrap();
+        assert_eq!(
+            t.get(r"Classes\Typball.tbdg", "").as_deref(),
+            Some("Typball Diagram")
+        );
+        assert_eq!(
+            t.get(r"Classes\Typball.tbdg\DefaultIcon", "").as_deref(),
+            Some(r"Z:\apps\Typball\Typball.exe,-104")
+        );
+        // 図もプレビューウィンドウで開けるので、「編集」「プレビュー」も出す
+        assert!(t.exists(r"Classes\Typball.tbdg\shell\edit\command"));
+        assert!(t.exists(r"Classes\Typball.tbdg\shell\view\command"));
+        t.reg.unregister(Kind::Tbdg).unwrap();
+        assert!(!t.exists(r"Classes\Typball.tbdg"));
     }
 
     #[test]

@@ -51,7 +51,7 @@ impl Format {
         match filetype {
             FileType::Typ => &[Pdf, Png, PngPages, Svg, SvgPages],
             FileType::Md => &[MdPdf, Html],
-            FileType::Txt => &[],
+            FileType::Txt | FileType::Tbdg => &[],
         }
     }
 
