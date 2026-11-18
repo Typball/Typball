@@ -273,6 +273,7 @@ The full license texts and the list of Rust libraries are in
 THIRD-PARTY-NOTICES.txt, which ships with Typball."""
 
 [settings]
+font_builtin = "(built-in)"
 title = "Preferences"
 file_location = "Settings file: {path}"
 file_location_tip = "Click to open the settings folder"
@@ -413,7 +414,7 @@ typst_ok = "Typst: OK ({pages} pages, {ms} ms)"
 typst_warnings = "Typst: OK with warnings ({pages} pages, {ms} ms)"
 typst_failed = "Typst: errors ({ms} ms)"
 markdown = "Markdown → HTML: {lines} lines, {chars} chars ({ms} ms)"
-site_server = "Dev server: {url}"
+site_server = "Dev server ({name}): {url}"
 
 [tabmenu]
 close = "&Close"
@@ -429,10 +430,17 @@ copy_path = "Copy &Path"
 [preview]
 # Mode bar of the Markdown preview (WebView)
 mode_markdown = "Markdown"
-mode_site = "Site (dev server)"
+# Toggle buttons for scroll sync (the same settings as the check boxes on Settings → Files → Markdown)
+sync_to_preview = "Scroll the preview along with the editor"
+sync_to_editor = "Scroll the editor along with the preview"
+# {name} is the generator's name (Hugo, Jekyll, ...)
+mode_site = "Site ({name})"
 site_hint = "Updates when you save"
-site_starting = "Starting the dev server..."
+site_starting = "Starting the {name} dev server..."
+# When the server cannot start the preview falls back to plain Markdown. The bar is narrow, so keep this short
 site_error = "Could not start the dev server: {error}"
+site_exited = "The dev server exited: {error}"
+site_not_found = "Command \"{command}\" was not found (put it in the project folder, add it to PATH, or write its full path in the settings)"
 site_timeout = "The dev server is not responding"
 webview_missing = "The HTML preview needs the Microsoft Edge WebView2 Runtime, which was not found. Please install it."
 # Toolbar of the Typst preview
@@ -521,9 +529,34 @@ markdown_mode = "Markdown preview:"
 markdown_mode_auto = "Automatic (site mode inside a site project)"
 markdown_mode_markdown = "Render Markdown as HTML"
 markdown_mode_site = "Show the site's dev server"
-site_command = "Dev server command:"
-site_url = "URL to show:"
-site_note = "{port} becomes a free port and {root} the project folder (where hugo.toml lives). The default command's navigateToChanged makes the preview follow the page you save."
+site_note = "How site projects (Hugo, Jekyll, ...) are recognized and which dev server command runs is set on the Site Generators page below."
+
+[settings.site]
+# Settings → Preview → Site Generators (definitions of the generators used by site mode)
+title = "Site Generators"
+intro = "Typball walks up from the Markdown file's folder; the first folder that matches a condition is the site project, and its dev server is started there (site mode). Built-in definitions can be changed and new ones added."
+generator = "Generator:"
+add = "&Add"
+remove = "&Remove"
+reset = "&Reset to default"
+enabled = "Detect projects of this generator"
+name = "Name:"
+detect = "Detect by:"
+command = "Dev server command:"
+url = "URL to show:"
+static_dirs = "Static file folders:"
+new_name = "New generator"
+# Appended to the names of user-added definitions in the list
+custom_mark = "(added)"
+pages_command = "Page list command:"
+page_urls = "Page URLs:"
+# Tooltips are not wrapped automatically, so the line breaks are written here
+detect_tip = "Names of files or folders in the project folder.\nCommas separate alternatives, \"+\" requires all, \"a|b\" either, \"!name\" must not exist,\n\"name:text\" means the file contains the text, and \"*\" matches anything.\nExamples: hugo.toml|hugo.yaml, config.toml + content + !templates, package.json:hexo, astro.config.*"
+command_tip = "Runs in the project folder.\nThe program is looked up in the project folder first, then on PATH (.exe / .bat / .cmd);\nwrite its full path if it is not found.\n{port} becomes a free port, {port2} a second free port and {root} the project folder."
+static_dirs_tip = "Folders searched for site-root URLs such as /images/a.png when Markdown is rendered as HTML\n(comma separated; \".\" is the project folder)."
+pages_command_tip = "A command that makes the generator list \"file → URL\", used to show the page of the Markdown file you have open.\nIt runs in the project folder and must print CSV whose header row has the columns path and permalink (or url).\nExample: hugo list all\nLeave it empty to skip it (only the Page URLs rules below are used)."
+page_urls_tip = "URL rules tried when the file is not in the list (comma separated; tried in order, and the first one the dev server answers is used).\nEach rule is \"folder => URL\" and applies to files inside that folder (\".\" is the project folder).\n{path} is the path relative to the folder without the extension (index and README become the folder), {dir} and {name} are its two parts,\nand {year} {month} {day} {title} are the parts of a file name such as 2026-11-14-title.\nExample: content => /{path}/, _posts => /{year}/{month}/{day}/{title}.html"
+note = "Hover over a field to see how to write it.\nThe URL of the Markdown file you have open is looked up in the output of the page list command, then with the Page URLs rules.\nIf it is not found, the top of the site is shown."
 
 [settings.assoc]
 title = "File associations"

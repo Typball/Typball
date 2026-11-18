@@ -66,6 +66,10 @@ fn collect_headings(node: &LinkedNode, text: &str, out: &mut Vec<OutlineItem>) {
 }
 
 fn markdown_outline(text: &str) -> Vec<OutlineItem> {
+    // Hugo の `{{< highlight >}}` … `{{< /highlight >}}` はコードの囲みとして読む (中の `# コメント` を
+    // 見出しにしない)。同じ長さで置き換えるので、行番号はずれない
+    let fenced = crate::shortcode::fence_highlight(text);
+    let text: &str = &fenced;
     let mut out = Vec::new();
     let mut in_fence = false;
     // 冒頭のメタ情報 (front matter) の中の `# コメント` は見出しではない
@@ -168,6 +172,18 @@ mod tests {
             (items[1].level, items[1].line, items[1].text.as_str()),
             (2, 5, "B")
         );
+    }
+
+    #[test]
+    fn markdown_headings_skip_hugo_highlight_shortcodes() {
+        let src = "# A\n{{< highlight bash>}}\n# comment\n$ ls\n{{< / highlight >}}\n## B\n";
+        let items = markdown_outline(src);
+        assert_eq!(items.len(), 2);
+        assert_eq!((items[0].line, items[0].text.as_str()), (0, "A"));
+        assert_eq!((items[1].line, items[1].text.as_str()), (5, "B"));
+        // 閉じていない開きの後ろは、ふつうの Markdown として読む
+        let src = "{{< highlight bash >}}\n# C\n";
+        assert_eq!(markdown_outline(src).len(), 1);
     }
 
     #[test]

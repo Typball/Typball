@@ -82,17 +82,22 @@ impl Zoom {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Glyph {
+pub(crate) enum Glyph {
     ZoomOut,
     ZoomIn,
     Prev,
     Next,
+    /// スクロールの同期: エディタ → プレビュー (Web プレビューのバー。webpreview.rs)
+    SyncToPreview,
+    /// スクロールの同期: プレビュー → エディタ
+    SyncToEditor,
 }
 
-/// 自前描画のアイコンボタン (押して離すと `on_click`)
+/// 自前描画のアイコンボタン (押して離すと `on_click`)。[`IconButton::set_checked`] を呼ぶと、入・切を示す
+/// ボタンになる (入っている間は押し込んだ見た目、切れている間は絵を薄くする)
 #[derive(Clone)]
-struct IconButton {
-    panel: Panel,
+pub(crate) struct IconButton {
+    pub(crate) panel: Panel,
     state: Rc<RefCell<ButtonState>>,
 }
 
@@ -101,11 +106,13 @@ struct ButtonState {
     hover: bool,
     pressed: bool,
     enabled: bool,
+    /// 入・切を示すボタンの今の状態 (ふつうのボタンは None)
+    checked: Option<bool>,
     on_click: Option<Rc<dyn Fn()>>,
 }
 
 impl IconButton {
-    fn new(parent: &Panel, glyph: Glyph, tip: &str) -> IconButton {
+    pub(crate) fn new(parent: &Panel, glyph: Glyph, tip: &str) -> IconButton {
         let size = parent.from_dip_int(BTN);
         let panel = drawing_panel(parent, Size::new(size, size));
         panel.set_tooltip(tip);
@@ -116,6 +123,7 @@ impl IconButton {
                 hover: false,
                 pressed: false,
                 enabled: true,
+                checked: None,
                 on_click: None,
             })),
         };
@@ -123,8 +131,18 @@ impl IconButton {
         button
     }
 
-    fn on_click(&self, f: impl Fn() + 'static) {
+    pub(crate) fn on_click(&self, f: impl Fn() + 'static) {
         self.state.borrow_mut().on_click = Some(Rc::new(f));
+    }
+
+    /// 入・切の表示を変える (変わったときだけ描き直す)
+    pub(crate) fn set_checked(&self, checked: bool) {
+        let mut st = self.state.borrow_mut();
+        if st.checked != Some(checked) {
+            st.checked = Some(checked);
+            drop(st);
+            self.panel.refresh(false, None);
+        }
     }
 
     fn set_enabled(&self, enabled: bool) {
@@ -217,7 +235,8 @@ impl IconButton {
         dc.set_background(rgb(ui.bar_bg));
         dc.clear();
         let st = self.state.borrow();
-        if st.enabled && (st.hover || st.pressed) {
+        let on = st.checked == Some(true);
+        if st.enabled && (st.hover || st.pressed || on) {
             fill_round_rect(
                 &dc,
                 0,
@@ -225,14 +244,25 @@ impl IconButton {
                 width,
                 height,
                 dip.pxf(4.0),
-                if st.pressed {
+                if st.pressed || on {
                     ui.pressed_bg
                 } else {
                     ui.hover_bg
                 },
             );
         }
-        let fg = if st.enabled { ui.text } else { ui.text_dim };
+        if on {
+            // 入っている: 押し込んだ見た目に枠を足して、乗せただけ・押している途中と見分けられるようにする
+            dc.set_pen(rgb(ui.text_dim), dip.pen(), PenStyle::Solid);
+            dc.set_brush(rgb(ui.pressed_bg), BrushStyle::Transparent);
+            dc.draw_rounded_rectangle(0, 0, width, height, dip.pxf(4.0));
+        }
+        // 切れているボタンは絵を薄くする
+        let fg = if st.enabled && st.checked != Some(false) {
+            ui.text
+        } else {
+            ui.text_dim
+        };
         paint_glyph(&dc, st.glyph, width / 2, height / 2, dip, fg, ui.bar_bg);
     }
 }
@@ -263,6 +293,20 @@ fn paint_glyph(dc: &dyn DeviceContext, glyph: Glyph, cx: i32, cy: i32, dip: Dip,
             dc.set_brush(rgb(fg), BrushStyle::Solid);
             let pts =
                 [(3, -5), (8, 0), (3, 5)].map(|(x, y)| DcPoint::new(cx + s * d(x), cy + d(y)));
+            dc.draw_polygon(&pts, 0, 0, PolygonFillMode::OddEven);
+        }
+        Glyph::SyncToPreview | Glyph::SyncToEditor => {
+            // 2 本の縦線 (左がエディタ、右がプレビューのスクロール位置) と、動かす側から合わせる側への矢印。
+            // 動かす側の線を太くする
+            let s = if glyph == Glyph::SyncToPreview { 1 } else { -1 };
+            dc.set_pen(rgb(fg), (pen * 2).max(2), PenStyle::Solid);
+            dc.draw_line(cx - s * d(8), cy - d(6), cx - s * d(8), cy + d(7));
+            dc.set_pen(rgb(fg), pen, PenStyle::Solid);
+            dc.draw_line(cx + s * d(8), cy - d(6), cx + s * d(8), cy + d(7));
+            dc.draw_line(cx - s * d(4), cy, cx + s * d(1), cy);
+            dc.set_brush(rgb(fg), BrushStyle::Solid);
+            let pts =
+                [(1, -4), (5, 0), (1, 4)].map(|(x, y)| DcPoint::new(cx + s * d(x), cy + d(y)));
             dc.draw_polygon(&pts, 0, 0, PolygonFillMode::OddEven);
         }
     }

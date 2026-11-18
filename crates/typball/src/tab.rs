@@ -990,7 +990,12 @@ impl Tab {
             }
             Pane::Preview if self.filetype() == FileType::Md => {
                 let path = self.doc.borrow().path.clone();
-                let web = WebPreview::new(&bbox.body, self.host.frame, path.as_deref());
+                let web = WebPreview::new(
+                    &bbox.body,
+                    self.host.frame,
+                    path.as_deref(),
+                    Some(self.host.on_layout_changed.clone()),
+                );
                 bbox.set_content(&web.container);
                 self.bind_web_preview(&web);
                 PaneContent::Web(web)
@@ -1137,6 +1142,12 @@ impl Tab {
 
     /// ページ → Rust のメッセージ: リンクを開く、プレビューのスクロールをエディタに反映する
     fn bind_web_preview(&self, web: &Rc<WebPreview>) {
+        // 開発サーバーが表示できた・落ちたときに、コンソールへその出力を出し直す (組み直しのついでに出る)。
+        // タイマーだけを持たせる: タブを持たせると、タブとプレビューが互いに持ち合って解放されない
+        let render_timer = self.render_timer.clone();
+        web.on_server_change(move || {
+            render_timer.start(RENDER_DELAY_MS, true);
+        });
         let tab = self.clone();
         let weak = Rc::downgrade(web);
         web.on_message(move |msg| {
@@ -1161,7 +1172,11 @@ impl Tab {
                     return;
                 }
                 let mut parts = rest.trim().split(':');
-                let line = parts.next().and_then(|s| s.parse::<i32>().ok());
+                // 行は小数でも来る (サイトモード: 小数部は、折り返された行の途中の位置)
+                let line = parts
+                    .next()
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .filter(|l| l.is_finite());
                 let anchor = parts
                     .next()
                     .and_then(|s| s.parse::<f64>().ok())
@@ -1173,7 +1188,10 @@ impl Tab {
                     }
                     let stc = tab.stc;
                     let on_screen = scintilla::lines_on_screen(&stc).max(1);
-                    let visible = scintilla::visible_from_doc_line(&stc, (line - 1).max(0));
+                    let doc_line = (line.floor() as i32 - 1).max(0);
+                    let wraps = scintilla::wrap_count(&stc, doc_line).max(1);
+                    let visible = scintilla::visible_from_doc_line(&stc, doc_line)
+                        + (line.fract() * wraps as f64).floor() as i32;
                     let first = visible - ((on_screen - 1) as f64 * anchor).round() as i32;
                     scintilla::set_first_visible_line(&stc, first.max(0));
                 }
@@ -1213,8 +1231,13 @@ impl Tab {
         };
         let anchor_visible =
             (first + ((on_screen - 1) as f64 * anchor).round() as i32).min(total - 1);
-        let line = scintilla::doc_line_from_visible(&stc, anchor_visible) + 1;
-        web.scroll_to_line(line, anchor);
+        let doc_line = scintilla::doc_line_from_visible(&stc, anchor_visible);
+        // 折り返された行の途中にいるなら、その割合を小数部にして渡す (サイトモードは、長い段落の中でも
+        // 表示上の 1 行ごとにプレビューを進める)
+        let wraps = scintilla::wrap_count(&stc, doc_line).max(1);
+        let within = (anchor_visible - scintilla::visible_from_doc_line(&stc, doc_line)).max(0);
+        let fraction = (within as f64 / wraps as f64).min(0.99);
+        web.scroll_to_line((doc_line + 1) as f64 + fraction, anchor);
     }
 
     fn active_outline_list(&self) -> Option<ListBox> {
@@ -1670,6 +1693,10 @@ impl Tab {
     /// 設定の置き場と違う場所にドッキングしているペインを置き直す (設定変更後に呼ぶ)
     pub fn relayout_panes(&self) {
         let settings = settings::get();
+        // スクロールの同期の設定が (プレビューのバーのボタンや設定画面で) 変わっていれば、ボタンの表示を合わせる
+        if let Some(web) = self.active_web_preview() {
+            web.refresh_sync_buttons();
+        }
         // この形式のペインの大きさが (同じ形式の他のタブで動かされて) 変わっていれば合わせる
         let sizes = self.filetype().pane_sizes(&settings).as_array();
         if sizes != *self.pane_sizes.borrow() {
@@ -1920,6 +1947,19 @@ impl Tab {
     /// タブを閉じるとき: 浮動ウィンドウも一緒に閉じてからページを破棄する
     pub fn destroy(&self) {
         self.render_timer.stop();
+        // Web プレビューのタイマーも、ページを破棄する前に止める (止めないと、破棄済みのパネルへ知らせが飛んで落ちる)。
+        // 開発サーバーは、ほかのタブで使っていなければ止まる
+        for info in self.panes.borrow().iter() {
+            let contents = [
+                info.docked.as_ref().map(|d| &d.content),
+                info.floating.as_ref().map(|f| &f.content),
+            ];
+            for content in contents.into_iter().flatten() {
+                if let PaneContent::Web(web) = content {
+                    web.close();
+                }
+            }
+        }
         editor::forget(&self.stc);
         for which in Pane::ALL {
             self.destroy_float(which);
@@ -2611,6 +2651,10 @@ impl Tab {
         if changed.ui {
             if let Some(diagram) = self.diagram() {
                 diagram.apply_options();
+            }
+            // Web プレビューの上のバー (同期のボタンとモードの一覧) の背景
+            if let Some(web) = self.active_web_preview() {
+                web.apply_theme();
             }
         }
         if changed.preview {

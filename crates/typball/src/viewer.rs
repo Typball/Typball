@@ -144,7 +144,7 @@ impl Viewer {
                 Content::Typst(view)
             }
             FileType::Md => {
-                let web = WebPreview::new(&body, frame, doc.path.as_deref());
+                let web = WebPreview::new(&body, frame, doc.path.as_deref(), None);
                 fill(&body, &web.container);
                 Content::Web(web)
             }
@@ -221,6 +221,10 @@ impl Viewer {
             move |event| {
                 if let Some(v) = weak.upgrade() {
                     crate::mermaid::release(&v.body);
+                    // サイトモードのタイマーを止め、開発サーバーをほかで使っていなければ止める
+                    if let Content::Web(web) = &v.content {
+                        web.close();
+                    }
                     VIEWERS.with(|list| list.borrow_mut().retain(|x| !Rc::ptr_eq(x, &v)));
                 }
                 event.skip(true);

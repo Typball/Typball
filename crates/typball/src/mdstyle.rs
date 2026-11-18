@@ -48,6 +48,10 @@ const CODE_LIMIT: usize = 256 * 1024;
 
 /// 全文のスタイル: (長さ (バイト), スタイル) の並び
 pub fn runs(text: &str) -> Vec<(usize, Style)> {
+    // Hugo の `{{< highlight 言語 >}}` … `{{< /highlight >}}` はコードブロックとして色分けする。
+    // 同じ長さの囲みに置き換えるので、以下の位置は元のテキストにそのまま当てはまる
+    let fenced = crate::shortcode::fence_highlight(text);
+    let text: &str = &fenced;
     let mut styles: Vec<Option<Tag>> = vec![None; text.len()];
     // コードブロックの中の字句 (範囲, タグ)。最後に `styles` の上にかぶせる
     let mut tokens: Vec<(Range<usize>, Option<Tag>)> = Vec::new();

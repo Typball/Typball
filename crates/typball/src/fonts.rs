@@ -25,6 +25,20 @@ const EDITOR_FONTS: &[(&str, &[u8])] = &[
     ),
 ];
 
+/// 同梱の UDEV Gothic のデータ (Regular, Bold)。プレビューのフォントにも選べるように、Typst (typball-core) にも渡す
+pub fn editor_font_data() -> Vec<&'static [u8]> {
+    EDITOR_FONTS.iter().map(|(_, data)| *data).collect()
+}
+
+/// 同梱の UDEV Gothic を、ファイル名 (`UDEVGothic-Regular.ttf` など) で引く。Markdown のプレビューが `/assets/` から
+/// @font-face で読むのに使う
+pub fn editor_font_file(name: &str) -> Option<&'static [u8]> {
+    EDITOR_FONTS
+        .iter()
+        .find(|(file, _)| *file == name)
+        .map(|(_, data)| *data)
+}
+
 /// 登録する全フォント (ファイル名, データ)。Noto Sans JP の並びは typball-core の embedded_font_data と同じ
 fn all_fonts() -> impl Iterator<Item = (&'static str, &'static [u8])> {
     const NOTO_NAMES: [&str; 2] = ["NotoSansJP-Regular.otf", "NotoSansJP-Bold.otf"];

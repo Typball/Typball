@@ -74,6 +74,10 @@ pub(crate) fn options() -> Options {
 
 /// Markdown を HTML (`<article>` の中身) にする
 pub fn render(markdown: &str, ctx: &Context) -> Output {
+    // Hugo の `{{< highlight 言語 >}}` … `{{< /highlight >}}` はコードブロックとして描く (同じ長さの
+    // 囲みに置き換えるので、行番号はずれない)
+    let fenced = crate::shortcode::fence_highlight(markdown);
+    let markdown: &str = &fenced;
     let lines = LineIndex::new(markdown);
     let events = coalesce_text(Parser::new_ext(markdown, options()).into_offset_iter());
 

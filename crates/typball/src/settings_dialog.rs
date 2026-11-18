@@ -30,7 +30,7 @@ type PageBuilder = fn(&Panel, &Settings, &mut Readers, &Dialog);
 
 /// ページの並び: (タイトルのキー, 中身を作る関数, 直前の親ページの子か)。
 /// 子ページは Treebook で親の下にぶら下がる (ファイル → 形式ごとの設定)
-const PAGES: [(&str, PageBuilder, bool); 11] = [
+const PAGES: [(&str, PageBuilder, bool); 12] = [
     ("settings.general.title", page_general, false),
     ("settings.display.title", page_display, false),
     ("settings.editor.title", page_editor, false),
@@ -40,6 +40,7 @@ const PAGES: [(&str, PageBuilder, bool); 11] = [
     ("filetype.typ", page_filetype_typ, true),
     ("filetype.tbdg", page_filetype_tbdg, true),
     ("settings.preview.title", page_preview, false),
+    ("settings.site.title", page_site, true),
     ("settings.assoc.title", page_assoc, false),
     ("settings.update.title", page_update, false),
 ];
@@ -120,8 +121,14 @@ pub fn show(parent: &Frame, current: &Settings) -> Option<Outcome> {
     };
     // 子ページが最初から見えるように、いったん最後の子ページを選んで親を展開させてから戻す
     // (wxDragon の Treebook に ExpandNode が無い。選択はツリーの EnsureVisible で親を開く)
-    if let Some(last_sub) = PAGES.iter().rposition(|(_, _, sub)| *sub) {
-        book.set_selection(last_sub);
+    // 子ページのある親が複数あるので (ファイル、プレビュー)、それぞれの最後の子ページを選んで全部を開く
+    for (index, (_, _, sub)) in PAGES.iter().enumerate() {
+        let group_ends = PAGES
+            .get(index + 1)
+            .is_none_or(|(_, _, next_sub)| !next_sub);
+        if *sub && group_ends {
+            book.set_selection(index);
+        }
     }
     build_page(0);
     book.set_selection(0);
@@ -235,6 +242,41 @@ fn label(parent: &Panel, key: &str) -> StaticText {
     StaticText::builder(parent).with_label(&tr(key)).build()
 }
 
+/// Typball に内蔵しているフォント (OS に入れなくても使える。エディタでもプレビューでも選べる)。設定のフォント一覧では、
+/// 名前の前に印を付けて一覧の先頭に並べ、OS のフォントと見分けられるようにする。設定ファイルに保存するのは、印の無い本当の名前
+/// (フォントそのものの名前は変えない: 文書を Typball の外へ持ち出したときに同じ名前で通じるように)
+const BUILTIN_FONTS: [&str; 2] = [
+    crate::fonts::EDITOR_FONT_FAMILY,
+    typball_core::EMBEDDED_FONT_FAMILY,
+];
+
+/// フォントの名前を、一覧と欄に見せる形にする (内蔵フォントなら印を付ける)
+fn shown_font_name(name: &str) -> String {
+    let name = name.trim();
+    if BUILTIN_FONTS.contains(&name) {
+        format!("{} {name}", tr("settings.font_builtin"))
+    } else {
+        name.to_string()
+    }
+}
+
+/// 一覧の先頭に並べる内蔵フォント (印付き)。`first` (その欄の既定のフォント) を先に
+fn builtin_font_choices(first: &str) -> Vec<String> {
+    let mut names: Vec<&str> = BUILTIN_FONTS.to_vec();
+    names.sort_by_key(|name| *name != first);
+    names.into_iter().map(shown_font_name).collect()
+}
+
+/// 欄の文字から、保存するフォントの名前を取り出す (印を外す)
+fn entered_font_name(text: &str) -> String {
+    let text = text.trim();
+    let mark = tr("settings.font_builtin");
+    text.strip_prefix(mark.as_str())
+        .map(str::trim_start)
+        .unwrap_or(text)
+        .to_string()
+}
+
 /// フォントサイズの入力欄と、その右の「既定のフォント・サイズに戻す」ボタンを並べた行。
 /// ボタンはフォント名とサイズの両方を既定値 (`face` / `size`) に戻す (エディタとプレビューで共通)
 fn font_size_row(
@@ -248,7 +290,7 @@ fn font_size_row(
         .with_label(&tr("settings.editor.font_reset"))
         .build();
     reset.on_click(move |_| {
-        font_face.set_value(&face);
+        font_face.set_value(&shown_font_name(&face));
         font_size.set_value(size);
     });
     let row = BoxSizer::builder(Orientation::Horizontal).build();
@@ -561,24 +603,26 @@ fn editor_form(
     // 同梱の UDEV Gothic (既定) を先頭に、続いて等幅フォント、残りを後に (どちらも名前順)。手入力もできる
     let embedded = crate::fonts::EDITOR_FONT_FAMILY;
     let families = typball_core::system_font_families();
-    let mut choices: Vec<String> = vec![embedded.to_string()];
+    // 内蔵フォントを先頭に (既定の UDEV Gothic、Noto Sans JP の順)、続いて等幅フォント、残りを後に
+    let mut choices: Vec<String> = builtin_font_choices(embedded);
     choices.extend(
         families
             .iter()
             .filter(|f| f.monospace)
             .map(|f| f.name.clone())
-            .filter(|name| name != embedded),
+            .filter(|name| !BUILTIN_FONTS.contains(&name.as_str())),
     );
     choices.extend(
         families
             .iter()
             .filter(|f| !f.monospace)
-            .map(|f| f.name.clone()),
+            .map(|f| f.name.clone())
+            .filter(|name| !BUILTIN_FONTS.contains(&name.as_str())),
     );
     // 一覧は最初にドロップダウンを開いたときに入れる (数百のフォント名を入れるのに数百 ms
     // かかり、ダイアログが開くのが遅くなる)。まとめて追加し、描画も止めておく
     let font_face = ComboBox::builder(panel)
-        .with_value(&values.font_face)
+        .with_value(&shown_font_name(&values.font_face))
         .build();
     let filled = std::rc::Rc::new(std::cell::Cell::new(false));
     font_face.on_dropdown({
@@ -848,7 +892,7 @@ fn editor_form(
     grid.add_sizer(&marks_row, 0, SizerFlag::AlignLeft, 0);
 
     let read: Rc<dyn Fn(&mut settings::Editor)> = Rc::new(move |e| {
-        e.font_face = font_face.get_value().trim().to_string();
+        e.font_face = entered_font_name(&font_face.get_value());
         e.font_size = font_size.value();
         e.tab_width = tab_width.value();
         e.line_spacing = line_spacing.value().clamp(0, 40);
@@ -1570,15 +1614,16 @@ fn page_preview(panel: &Panel, current: &Settings, readers: &mut Readers, _dialo
 
     // プレビューのフォント (Typst の既定・Markdown の本文・プレビューウィンドウ)。同梱の Noto Sans JP を先頭に
     let embedded = typball_core::EMBEDDED_FONT_FAMILY;
-    let mut choices: Vec<String> = vec![embedded.to_string()];
+    // 内蔵フォントを先頭に (既定の Noto Sans JP、UDEV Gothic の順)
+    let mut choices: Vec<String> = builtin_font_choices(embedded);
     choices.extend(
         typball_core::system_font_families()
             .iter()
             .map(|f| f.name.clone())
-            .filter(|name| name != embedded),
+            .filter(|name| !BUILTIN_FONTS.contains(&name.as_str())),
     );
     let font_face = ComboBox::builder(panel)
-        .with_value(&current.preview.font_face)
+        .with_value(&shown_font_name(&current.preview.font_face))
         .build();
     let filled = std::rc::Rc::new(std::cell::Cell::new(false));
     font_face.on_dropdown({
@@ -1661,26 +1706,7 @@ fn page_preview(panel: &Panel, current: &Settings, readers: &mut Readers, _dialo
     );
     grid.add(&mode, 0, SizerFlag::AlignLeft, 0);
 
-    // 開発サーバーのコマンドと URL
-    let command = TextCtrl::builder(panel).build();
-    command.set_value(&current.preview.site_command);
-    grid.add(
-        &label(panel, "settings.preview.site_command"),
-        0,
-        LABEL_FLAGS,
-        0,
-    );
-    grid.add(&command, 0, SizerFlag::Expand, 0);
-    let url = TextCtrl::builder(panel).build();
-    url.set_value(&current.preview.site_url);
-    grid.add(
-        &label(panel, "settings.preview.site_url"),
-        0,
-        LABEL_FLAGS,
-        0,
-    );
-    grid.add(&url, 0, SizerFlag::Expand, 0);
-
+    // サイトモードのジェネレーターの定義 (検出の条件・コマンド・URL) は子ページ (page_site) で決める
     let note = StaticText::builder(panel)
         .with_label(&tr("settings.preview.site_note"))
         .build();
@@ -1706,11 +1732,11 @@ fn page_preview(panel: &Panel, current: &Settings, readers: &mut Readers, _dialo
     panel.layout();
 
     readers.push(Box::new(move |s| {
-        let face = font_face.get_value();
-        s.preview.font_face = if face.trim().is_empty() {
+        let face = entered_font_name(&font_face.get_value());
+        s.preview.font_face = if face.is_empty() {
             typball_core::EMBEDDED_FONT_FAMILY.to_string()
         } else {
-            face.trim().to_string()
+            face
         };
         s.preview.font_size = font_size.value().clamp(6, 72);
         s.preview.tab_width = tab_width.value().clamp(1, 16);
@@ -1718,19 +1744,321 @@ fn page_preview(panel: &Panel, current: &Settings, readers: &mut Readers, _dialo
             .get_selection()
             .and_then(|i| MarkdownMode::ALL.get(i as usize).copied())
             .unwrap_or_default();
-        let defaults = crate::settings::Preview::default();
-        let command = command.get_value();
-        s.preview.site_command = if command.trim().is_empty() {
-            defaults.site_command
-        } else {
-            command
-        };
-        let url = url.get_value();
-        s.preview.site_url = if url.trim().is_empty() {
-            defaults.site_url
-        } else {
-            url
-        };
+    }));
+}
+
+// ---------------------------------------------------------------------------
+// サイトジェネレーター (プレビューのサイトモードで使う定義。site.rs)
+// ---------------------------------------------------------------------------
+
+/// 「,」区切りの欄を項目の並びにする
+fn split_list(text: &str) -> Vec<String> {
+    text.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// 設定で足した定義の ID (設定ファイルのテーブル名) を名前から作る。英数字以外は `-` にし、
+/// `taken` (内蔵の ID と、ほかの定義の ID) とぶつからないように番号を付ける
+fn generator_id(name: &str, taken: &[String]) -> String {
+    let mut slug = String::new();
+    for c in name.trim().chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_end_matches('-');
+    let base = if slug.is_empty() { "custom" } else { slug };
+    let mut id = base.to_string();
+    let mut n = 2;
+    while taken.contains(&id) {
+        id = format!("{base}-{n}");
+        n += 1;
+    }
+    id
+}
+
+/// 一覧に出す名前 (設定で足した定義には印を付ける)
+fn generator_label(g: &crate::site::Generator) -> String {
+    if g.builtin {
+        g.name.clone()
+    } else {
+        format!("{} {}", g.name, tr("settings.site.custom_mark"))
+    }
+}
+
+fn page_site(panel: &Panel, current: &Settings, readers: &mut Readers, _dialog: &Dialog) {
+    use crate::site::{self, Generator};
+    let px = |v: i32| panel.from_dip_int(v);
+
+    // 内蔵の定義 (上書きを重ねたもの) を先に、設定で足した定義を後ろに並べる。
+    // 検出の優先順 (足した定義が先) は site::generators が決めるので、ここの並びは見やすさだけ
+    let mut list = site::generators(&current.preview);
+    list.sort_by_key(|g| !g.builtin);
+    let list = Rc::new(RefCell::new(list));
+    let selected = Rc::new(std::cell::Cell::new(0usize));
+
+    let intro = StaticText::builder(panel)
+        .with_label(&tr("settings.site.intro"))
+        .build();
+
+    let choice = choice_with(panel, list.borrow().iter().map(generator_label).collect());
+    choice.set_selection(0);
+    let add = Button::builder(panel)
+        .with_label(&tr("settings.site.add"))
+        .build();
+    let remove = Button::builder(panel)
+        .with_label(&tr("settings.site.remove"))
+        .build();
+    let reset = Button::builder(panel)
+        .with_label(&tr("settings.site.reset"))
+        .build();
+    let row = BoxSizer::builder(Orientation::Horizontal).build();
+    row.add(&choice, 1, SizerFlag::AlignCenterVertical, 0);
+    for button in [&add, &remove, &reset] {
+        row.add(
+            button,
+            0,
+            SizerFlag::AlignCenterVertical | SizerFlag::Left,
+            px(GAP),
+        );
+    }
+
+    let grid = form_grid(panel);
+    grid.add(&label(panel, "settings.site.generator"), 0, LABEL_FLAGS, 0);
+    grid.add_sizer(&row, 0, SizerFlag::Expand, 0);
+    let enabled = CheckBox::builder(panel)
+        .with_label(&tr("settings.site.enabled"))
+        .build();
+    // 左の列を空ける (wxDragon の add_spacer は大きさ 0 だと何も足さないので 1 にする)
+    grid.add_spacer(1);
+    grid.add(&enabled, 0, SizerFlag::AlignLeft, 0);
+    let field = |key: &str, tip: Option<&str>| {
+        let text = TextCtrl::builder(panel).build();
+        let caption = label(panel, key);
+        if let Some(tip) = tip {
+            let tip = tr(tip);
+            text.set_tooltip(&tip);
+            caption.set_tooltip(&tip);
+        }
+        grid.add(&caption, 0, LABEL_FLAGS, 0);
+        grid.add(&text, 0, SizerFlag::Expand, 0);
+        text
+    };
+    let name = field("settings.site.name", None);
+    let detect = field("settings.site.detect", Some("settings.site.detect_tip"));
+    let command = field("settings.site.command", Some("settings.site.command_tip"));
+    let url = field("settings.site.url", None);
+    let static_dirs = field(
+        "settings.site.static_dirs",
+        Some("settings.site.static_dirs_tip"),
+    );
+    // 開いているファイルのページを出すための 2 つ (sitepages.rs): ジェネレーターに一覧を出させるコマンドと、URL の規則
+    let pages_command = field(
+        "settings.site.pages_command",
+        Some("settings.site.pages_command_tip"),
+    );
+    let page_urls = field(
+        "settings.site.page_urls",
+        Some("settings.site.page_urls_tip"),
+    );
+
+    let note = StaticText::builder(panel)
+        .with_label(&tr("settings.site.note"))
+        .build();
+
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+    sizer.add(&intro, 0, SizerFlag::All, px(GAP));
+    sizer.add_sizer(
+        &grid,
+        0,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
+        px(GAP),
+    );
+    sizer.add(
+        &note,
+        0,
+        SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
+        px(GAP),
+    );
+    panel.set_sizer(sizer, true);
+    // 折り返しはサイザーに入れてから (page_preview と同じ)
+    intro.wrap(px(540));
+    note.wrap(px(540));
+
+    // 選んである定義を欄に出す
+    let show = Rc::new({
+        let list = list.clone();
+        let selected = selected.clone();
+        move || {
+            let list = list.borrow();
+            let Some(g) = list.get(selected.get()) else {
+                return;
+            };
+            enabled.set_value(g.enabled);
+            name.set_value(&g.name);
+            detect.set_value(&g.detect.join(", "));
+            command.set_value(&g.command);
+            url.set_value(&g.url);
+            static_dirs.set_value(&g.static_dirs.join(", "));
+            pages_command.set_value(&g.pages_command);
+            page_urls.set_value(&g.page_urls.join(", "));
+            // 内蔵の定義は名前を変えられず、消せない (既定に戻せる)。足した定義はその逆
+            name.enable(!g.builtin);
+            remove.enable(!g.builtin);
+            reset.enable(g.builtin);
+        }
+    });
+    // 欄の値を、選んである定義に書き戻す。空にした欄は既定 (内蔵の定義の値) に戻る
+    let store = Rc::new({
+        let list = list.clone();
+        let selected = selected.clone();
+        move || {
+            let mut list = list.borrow_mut();
+            let Some(g) = list.get_mut(selected.get()) else {
+                return;
+            };
+            let base = site::builtin(&g.id);
+            g.enabled = enabled.is_checked();
+            let entered = name.get_value().trim().to_string();
+            if !g.builtin && !entered.is_empty() {
+                g.name = entered;
+            }
+            g.detect = split_list(&detect.get_value());
+            g.command = command.get_value().trim().to_string();
+            g.url = url.get_value().trim().to_string();
+            g.static_dirs = split_list(&static_dirs.get_value());
+            // この 2 つは空のままにできる (空 = 使わない)。内蔵の値に戻すのは「既定に戻す」
+            g.pages_command = pages_command.get_value().trim().to_string();
+            g.page_urls = split_list(&page_urls.get_value());
+            if let Some(base) = base {
+                if g.detect.is_empty() {
+                    g.detect = base.detect;
+                }
+                if g.command.is_empty() {
+                    g.command = base.command;
+                }
+                if g.url.is_empty() {
+                    g.url = base.url;
+                }
+            } else if g.url.is_empty() {
+                g.url = site::DEFAULT_URL.to_string();
+            }
+        }
+    });
+    // 一覧を作り直して `index` を選ぶ (追加・削除・名前の変更の後)
+    let refill = Rc::new({
+        let list = list.clone();
+        let selected = selected.clone();
+        let show = show.clone();
+        move |index: usize| {
+            let labels: Vec<String> = list.borrow().iter().map(generator_label).collect();
+            let index = index.min(labels.len().saturating_sub(1));
+            choice.freeze();
+            choice.clear();
+            for item in &labels {
+                choice.append(item);
+            }
+            choice.thaw();
+            choice.set_selection(index as u32);
+            selected.set(index);
+            show();
+        }
+    });
+    show();
+
+    choice.on_selection_changed({
+        let store = store.clone();
+        let refill = refill.clone();
+        move |_| {
+            let Some(index) = choice.get_selection() else {
+                return;
+            };
+            store();
+            // 足した定義の名前を変えていたら一覧にも出す
+            refill(index as usize);
+        }
+    });
+    add.on_click({
+        let list = list.clone();
+        let store = store.clone();
+        let refill = refill.clone();
+        move |_| {
+            store();
+            let index = {
+                let mut list = list.borrow_mut();
+                list.push(Generator {
+                    // ID は OK のときに名前から決める
+                    id: String::new(),
+                    name: tr("settings.site.new_name"),
+                    enabled: true,
+                    detect: Vec::new(),
+                    command: String::new(),
+                    url: site::DEFAULT_URL.to_string(),
+                    static_dirs: Vec::new(),
+                    pages_command: String::new(),
+                    page_urls: Vec::new(),
+                    builtin: false,
+                });
+                list.len() - 1
+            };
+            refill(index);
+            name.set_focus();
+        }
+    });
+    remove.on_click({
+        let list = list.clone();
+        let selected = selected.clone();
+        let refill = refill.clone();
+        move |_| {
+            let index = selected.get();
+            {
+                let mut list = list.borrow_mut();
+                if list.get(index).is_none_or(|g| g.builtin) {
+                    return;
+                }
+                list.remove(index);
+            }
+            refill(index);
+        }
+    });
+    reset.on_click({
+        let list = list.clone();
+        let selected = selected.clone();
+        let show = show.clone();
+        move |_| {
+            {
+                let mut list = list.borrow_mut();
+                let Some(g) = list.get_mut(selected.get()) else {
+                    return;
+                };
+                let Some(base) = site::builtin(&g.id) else {
+                    return;
+                };
+                *g = base;
+            }
+            show();
+        }
+    });
+
+    readers.push(Box::new(move |s| {
+        store();
+        // 新しく足した定義 (ID が空) に ID を付ける。何度呼ばれても同じ結果になるよう、写しの上で決める
+        let mut defs = list.borrow().clone();
+        let mut taken: Vec<String> = site::generators(&settings::Preview::default())
+            .into_iter()
+            .map(|g| g.id)
+            .chain(defs.iter().map(|g| g.id.clone()))
+            .filter(|id| !id.is_empty())
+            .collect();
+        for g in defs.iter_mut().filter(|g| g.id.is_empty()) {
+            g.id = generator_id(&g.name, &taken);
+            taken.push(g.id.clone());
+        }
+        s.preview.generators = site::to_overrides(&defs);
     }));
 }
 
@@ -2291,6 +2619,34 @@ fn line_numbers_key(value: LineNumbers) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builtin_mark_is_shown_but_not_saved() {
+        let udev = crate::fonts::EDITOR_FONT_FAMILY;
+        let shown = shown_font_name(udev);
+        assert_ne!(shown, udev);
+        assert!(shown.ends_with(udev));
+        // 一覧の先頭は内蔵の 2 つ。その欄の既定のフォントが先
+        let noto = typball_core::EMBEDDED_FONT_FAMILY;
+        assert_eq!(
+            builtin_font_choices(udev),
+            [shown_font_name(udev), shown_font_name(noto)]
+        );
+        assert_eq!(
+            builtin_font_choices(noto),
+            [shown_font_name(noto), shown_font_name(udev)]
+        );
+        // 一覧から選んでも、名前だけ打っても、保存するのは本当の名前
+        assert_eq!(entered_font_name(&shown), udev);
+        assert_eq!(entered_font_name(&format!("  {udev} ")), udev);
+        assert_eq!(
+            entered_font_name(&shown_font_name(typball_core::EMBEDDED_FONT_FAMILY)),
+            typball_core::EMBEDDED_FONT_FAMILY
+        );
+        // OS のフォントには印を付けない
+        assert_eq!(shown_font_name("Consolas"), "Consolas");
+        assert_eq!(entered_font_name("Consolas"), "Consolas");
+    }
 
     #[test]
     fn shorten_middle_keeps_both_ends() {

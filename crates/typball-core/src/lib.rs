@@ -388,12 +388,32 @@ fn embedded_cjk_alias() -> impl Iterator<Item = (Font, FontInfo)> {
     })
 }
 
+/// GUI 側が足す内蔵フォント (エディタ用の UDEV Gothic)
+static EXTRA_FONTS: OnceLock<Vec<&'static [u8]>> = OnceLock::new();
+
+/// 内蔵フォントを足す (Typst の文書から名前で使えるようになる)。GUI が、エディタ用に持っているフォントを
+/// プレビューのフォントにも選べるようにするために使う。**最初のコンパイル ([`warm_up`] を含む) より前に** 1 回だけ呼ぶ
+/// (フォントの一覧は最初に 1 回作るので、後から呼んでも効かない)
+pub fn add_embedded_fonts(data: &[&'static [u8]]) {
+    let _ = EXTRA_FONTS.set(data.to_vec());
+}
+
+fn extra_fonts() -> impl Iterator<Item = (Font, FontInfo)> {
+    EXTRA_FONTS.get().into_iter().flatten().flat_map(|data| {
+        Font::iter(Bytes::new(*data)).map(|font| {
+            let info = font.info().clone();
+            (font, info)
+        })
+    })
+}
+
 fn engine() -> &'static Engine {
     ENGINE.get_or_init(|| {
         let mut fonts = FontStore::new();
         fonts.extend(typst_kit::fonts::embedded());
         fonts.extend(embedded_cjk());
         fonts.extend(embedded_cjk_alias());
+        fonts.extend(extra_fonts());
         let system: Vec<_> = typst_kit::fonts::system().collect();
         let mut families: BTreeMap<String, bool> = BTreeMap::new();
         for (_, info) in &system {

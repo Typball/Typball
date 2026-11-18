@@ -10,6 +10,7 @@
 //! 3. 値を使う側 (`main.rs` の `apply_settings` など) で参照する
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::filetype::FileType;
@@ -148,16 +149,71 @@ pub struct Preview {
     /// エディタのタブ幅 (`[editor] tab_width`) とは別に決める
     pub tab_width: i32,
     pub markdown_mode: MarkdownMode,
-    /// 開発サーバーの起動コマンド。`{port}` と `{root}` (プロジェクトのフォルダ) が置き換わる
-    pub site_command: String,
-    /// WebView に表示する URL。`{port}` が置き換わる
-    pub site_url: String,
+    /// 前の版の設定 (開発サーバーのコマンドと URL が 1 組だけだった)。読むだけで、書き出さない。
+    /// 既定から変えてあれば、読み込みのときに Hugo の定義の上書きへ移す ([`Preview::migrate`])
+    #[serde(skip_serializing)]
+    pub site_command: Option<String>,
+    #[serde(skip_serializing)]
+    pub site_url: Option<String>,
     /// プレビューの配色。Typst は暗いとき明るさを反転して描き、Markdown は CSS を切り替える
     /// (サイトモードはサイト自身の CSS に任せる)
     pub theme: Theme,
     /// Typst のプレビューの倍率: "fit_width" (幅に合わせる) / "fit_page" (ページ全体) / "125" (%)。
     /// プレビューのツールバーで最後に選んだもの
     pub typst_zoom: String,
+    /// 静的サイトジェネレーターの定義 (`[preview.generators.hugo]` など)。内蔵の定義 (`site.rs`) と同じ ID なら
+    /// 書いた項目だけを上書きし、内蔵に無い ID なら新しい定義になる。テーブルなので、この構造体の最後に置く
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub generators: BTreeMap<String, GeneratorOverride>,
+}
+
+/// ジェネレーターの定義の上書き / 追加 (`[preview.generators.<ID>]`)。項目の意味は `site::Generator` と同じ。
+/// 書かれていない項目は、内蔵の定義の値 (内蔵に無い ID なら空) のまま
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GeneratorOverride {
+    /// 画面に出す名前 (内蔵に無い ID の定義だけ)
+    pub name: Option<String>,
+    /// false にすると検出しない
+    pub enabled: Option<bool>,
+    /// プロジェクトのルートを見分ける条件 (どれか 1 つに当てはまればよい)
+    pub detect: Option<Vec<String>>,
+    /// 開発サーバーのコマンド。`{port}` `{port2}` `{root}` が置き換わる
+    pub command: Option<String>,
+    /// WebView に表示する URL。`{port}` が置き換わる
+    pub url: Option<String>,
+    /// ルート相対の URL を探すフォルダ (プロジェクトのフォルダからの相対)
+    pub static_dirs: Option<Vec<String>>,
+    /// 「ファイル → URL」の一覧 (CSV) を出すコマンド。空の文字列を書くと、内蔵の定義のコマンドを使わない
+    pub pages_command: Option<String>,
+    /// ページの URL の規則 (`フォルダ => ひな形`)。空の配列を書くと、内蔵の定義の規則を使わない
+    pub page_urls: Option<Vec<String>>,
+}
+
+impl Preview {
+    /// 前の版の `site_command` / `site_url` を、Hugo の定義の上書きへ移す (前の版が見つけるのは Hugo だけだった)
+    fn migrate(&mut self) {
+        const OLD_COMMAND: &str = "hugo server -D -N -M --port {port} -s {root}";
+        const OLD_URL: &str = "http://localhost:{port}/";
+        let command = self.site_command.take().filter(|c| {
+            let c = c.trim();
+            !c.is_empty() && c != OLD_COMMAND
+        });
+        let url = self.site_url.take().filter(|u| {
+            let u = u.trim();
+            !u.is_empty() && u != OLD_URL
+        });
+        if command.is_none() && url.is_none() {
+            return;
+        }
+        let hugo = self.generators.entry("hugo".to_string()).or_default();
+        if hugo.command.is_none() {
+            hugo.command = command;
+        }
+        if hugo.url.is_none() {
+            hugo.url = url;
+        }
+    }
 }
 
 impl Default for Preview {
@@ -167,11 +223,11 @@ impl Default for Preview {
             font_size: 12,
             tab_width: 4,
             markdown_mode: MarkdownMode::Auto,
-            // -D: 下書きも出す、-N: 保存したページへ移動、-M: 出力をディスクに書かない
-            site_command: "hugo server -D -N -M --port {port} -s {root}".to_string(),
-            site_url: "http://localhost:{port}/".to_string(),
+            site_command: None,
+            site_url: None,
             theme: Theme::System,
             typst_zoom: "fit_width".to_string(),
+            generators: BTreeMap::new(),
         }
     }
 }
@@ -887,12 +943,19 @@ impl Settings {
         filetype.overrides_mut(self).editor = overrides;
     }
 
+    /// 設定ファイルの中身を読む (前の版の項目は今の形に直す)
+    pub fn parse(text: &str) -> Result<Settings, toml::de::Error> {
+        let mut s = toml::from_str::<Settings>(text)?;
+        s.preview.migrate();
+        Ok(s)
+    }
+
     /// ファイルから読み込む。ファイルが無ければ既定値。
     /// 壊れていて読めない場合は既定値と一緒にエラーメッセージを返す (上書き保存で復旧できる)。
     pub fn load() -> (Settings, Option<String>) {
         let path = path();
         match std::fs::read_to_string(&path) {
-            Ok(text) => match toml::from_str::<Settings>(&text) {
+            Ok(text) => match Settings::parse(&text) {
                 Ok(s) => (s, None),
                 Err(e) => (Settings::default(), Some(e.to_string())),
             },
@@ -1185,6 +1248,61 @@ line_numbers = \"both\"
         assert!(!toml::to_string(&Settings::default())
             .unwrap()
             .contains("template"));
+    }
+
+    #[test]
+    fn generators_are_tables_under_preview() {
+        // 既定のままなら何も書き出さない (前の版の項目も書き出さない)
+        let plain = toml::to_string_pretty(&Settings::default()).unwrap();
+        assert!(!plain.contains("generators"), "{plain}");
+        assert!(!plain.contains("site_command"), "{plain}");
+
+        let mut s = Settings::default();
+        s.preview.generators.insert(
+            "jekyll".to_string(),
+            GeneratorOverride {
+                command: Some("jekyll serve --port {port}".to_string()),
+                ..Default::default()
+            },
+        );
+        let text = toml::to_string_pretty(&s).unwrap();
+        assert!(text.contains("[preview.generators.jekyll]"), "{text}");
+        assert!(!text.contains("enabled"), "{text}");
+        assert_eq!(Settings::parse(&text).unwrap(), s);
+    }
+
+    #[test]
+    fn old_site_command_moves_to_the_hugo_generator() {
+        // 既定のままの値は捨てる
+        let s = Settings::parse(concat!(
+            "[preview]\nsite_command = \"hugo server -D -N -M --port {port} -s {root}\"\n",
+            "site_url = \"http://localhost:{port}/\"\n",
+        ))
+        .unwrap();
+        assert!(s.preview.generators.is_empty());
+        assert_eq!(s.preview.site_command, None);
+
+        // 変えてあった値は Hugo の定義へ
+        let s =
+            Settings::parse("[preview]\nsite_command = \"hugo server --port {port}\"\n").unwrap();
+        let hugo = &s.preview.generators["hugo"];
+        assert_eq!(hugo.command.as_deref(), Some("hugo server --port {port}"));
+        assert_eq!(hugo.url, None);
+        // 保存して読み直しても同じ
+        let text = toml::to_string_pretty(&s).unwrap();
+        assert!(!text.contains("site_command"), "{text}");
+        assert_eq!(Settings::parse(&text).unwrap(), s);
+
+        // 新しい形で書いてあれば、そちらが勝つ
+        let s = Settings::parse(concat!(
+            "[preview]\nsite_command = \"old {port}\"\n",
+            "[preview.generators.hugo]\ncommand = \"new {port}\"\n",
+        ))
+        .unwrap();
+        assert_eq!(
+            s.preview.generators["hugo"].command.as_deref(),
+            Some("new {port}")
+        );
     }
 
     #[test]

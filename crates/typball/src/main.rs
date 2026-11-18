@@ -22,6 +22,8 @@
 //! - `webpreview.rs`      WebView のプレビュー (Markdown → HTML、サイトモード)
 //! - `mdhtml.rs`          Markdown → HTML の変換 (画像 URL の書き換え・コードの色付け)
 //! - `site.rs`            静的サイトジェネレーターのプロジェクト検出と開発サーバーの起動
+//! - `sitepages.rs`       サイトモードで、開いているファイルのページの URL を求める部品 (一覧の CSV・URL の規則)
+//! - `shortcode.rs`       Hugo の `highlight` ショートコードをコードの囲みとして読むための置き換え
 //! - `webview2_loader.rs` WebView2 の自前ローダー (MinGW ビルドで WebView2Loader.dll を不要にする)
 //! - `update.rs`          GitHub Releases での更新の確認・取得・検証・自分自身の入れ替え
 //! - `update_dialog.rs`   更新のダイアログと進捗表示 (ヘルプ → 更新を確認、起動時の自動確認)
@@ -69,7 +71,9 @@ mod previewbar;
 mod scintilla;
 mod settings;
 mod settings_dialog;
+mod shortcode;
 mod site;
+mod sitepages;
 mod tab;
 mod tabbar;
 mod tabs;
@@ -181,6 +185,9 @@ fn main() {
     };
 
     // システムフォントの検索は数百 ms かかるので、最初のプレビューを待たせないよう先に別スレッドで済ませる
+    // エディタ用の UDEV Gothic を、Typst からも使えるようにする (プレビューのフォントに選べる)。
+    // フォントの一覧を作る前 (下の warm_up より前) に渡す
+    typball_core::add_embedded_fonts(&fonts::editor_font_data());
     std::thread::spawn(typball_core::warm_up);
     // コードの色付け用の構文定義の読み込みも同様
     std::thread::spawn(mdhtml::warm_up);

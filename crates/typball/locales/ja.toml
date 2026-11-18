@@ -273,6 +273,7 @@ This software is based in part on the work of the Independent JPEG Group.
 THIRD-PARTY-NOTICES.txt にあります。"""
 
 [settings]
+font_builtin = "(内蔵)"
 title = "設定"
 file_location = "設定ファイル: {path}"
 file_location_tip = "クリックで設定ディレクトリを開く"
@@ -414,7 +415,7 @@ typst_ok = "Typst: OK ({pages} ページ, {ms} ms)"
 typst_warnings = "Typst: OK、警告あり ({pages} ページ, {ms} ms)"
 typst_failed = "Typst: エラー ({ms} ms)"
 markdown = "Markdown → HTML: {lines} 行, {chars} 文字 ({ms} ms)"
-site_server = "開発サーバー: {url}"
+site_server = "開発サーバー ({name}): {url}"
 
 [tabmenu]
 close = "閉じる(&C)"
@@ -430,10 +431,17 @@ copy_path = "パスをコピー(&P)"
 [preview]
 # Markdown のプレビュー (WebView) のモード切り替えバー
 mode_markdown = "Markdown"
-mode_site = "サイト (開発サーバー)"
+# スクロールの同期の入・切のボタン (設定 → ファイル → Markdown のチェックボックスと同じ項目)
+sync_to_preview = "エディタをスクロールしたら、プレビューも合わせる"
+sync_to_editor = "プレビューをスクロールしたら、エディタも合わせる"
+# {name} はジェネレーターの名前 (Hugo、Jekyll など)
+mode_site = "サイト ({name})"
 site_hint = "保存すると更新されます"
-site_starting = "開発サーバーを起動しています..."
-site_error = "開発サーバーを起動できませんでした: {error}"
+site_starting = "{name} の開発サーバーを起動しています..."
+# 起動できなかったときは素の Markdown の表示に切り替える。バーは狭いので、理由が先に見えるよう短くする
+site_error = "開発サーバーを起動できません: {error}"
+site_exited = "開発サーバーが終了しました: {error}"
+site_not_found = "コマンド「{command}」が見つかりません (プロジェクトのフォルダに置くか、PATH を通すか、設定のコマンドをフルパスで書いてください)"
 site_timeout = "開発サーバーが応答しません"
 webview_missing = "WebView2 ランタイムが見つからないため、HTML プレビューを表示できません。Microsoft Edge WebView2 ランタイムをインストールしてください。"
 # Typst プレビューのツールバー
@@ -522,10 +530,35 @@ markdown_mode = "Markdown のプレビュー:"
 markdown_mode_auto = "自動 (サイトのプロジェクト内ならサイトモード)"
 markdown_mode_markdown = "Markdown を HTML にして表示"
 markdown_mode_site = "サイトの開発サーバーを表示"
-site_command = "開発サーバーのコマンド:"
-site_url = "表示する URL:"
 # 日本語は空白が無いと wx が折り返せないので、文の切れ目に改行を入れておく
-site_note = "{port} は空きポート、{root} はプロジェクトのフォルダ (hugo.toml などのある場所) に置き換わります。\n既定のコマンドの navigateToChanged により、保存した記事のページへ自動で移動します。"
+site_note = "サイトモードで使うジェネレーター (Hugo・Jekyll など) の見分け方と開発サーバーのコマンドは、\n下の「サイトジェネレーター」ページで決めます。"
+
+[settings.site]
+# 設定 → プレビュー → サイトジェネレーター (サイトモードで使うジェネレーターの定義)
+title = "サイトジェネレーター"
+intro = "Markdown のあるフォルダから上へ辿り、条件に合う最初のフォルダをサイトのプロジェクトとみなして、\nそこで開発サーバーを起動します (サイトモード)。内蔵の定義は変えられ、無いものは追加できます。"
+generator = "ジェネレーター:"
+add = "追加(&A)"
+remove = "削除(&D)"
+reset = "既定に戻す(&R)"
+enabled = "このジェネレーターのプロジェクトを検出する"
+name = "名前:"
+detect = "検出の条件:"
+command = "開発サーバーのコマンド:"
+url = "表示する URL:"
+static_dirs = "静的ファイルのフォルダ:"
+new_name = "新しいジェネレーター"
+# 一覧で、設定で足した定義の名前の後ろに付ける
+custom_mark = "(追加)"
+pages_command = "ページ一覧のコマンド:"
+page_urls = "ページの URL:"
+# ツールチップは自動では折り返されないので、改行を入れておく
+detect_tip = "プロジェクトのフォルダにあるファイルやフォルダの名前を書きます。\n「,」区切りはどれか 1 つ、「+」はすべて、「a|b」はどちらか、「!名前」は無いこと、\n「名前:文字列」はファイルの中にその文字列があること、「*」は任意の文字列です。\n例: hugo.toml|hugo.yaml, config.toml + content + !templates, package.json:hexo, astro.config.*"
+command_tip = "プロジェクトのフォルダで実行します。\nプログラムは、プロジェクトのフォルダ、PATH の順に探します (.exe / .bat / .cmd)。\n見つからないときはフルパスで書いてください。\n{port} は空きポート、{port2} は 2 つめの空きポート、{root} はプロジェクトのフォルダに置き換わります。"
+static_dirs_tip = "Markdown を HTML にして表示するとき、/images/a.png のような\nサイトのルートからの URL を探すフォルダです (「,」区切り。「.」はプロジェクトのフォルダ)。"
+pages_command_tip = "開いている Markdown のページを表示するために、ジェネレーターに「ファイル → URL」の一覧を出させるコマンドです。\nプロジェクトのフォルダで実行します。出力は CSV で、見出しの行に path と permalink (または url) の列が必要です。\n例: hugo list all\n空にすると使いません (下の「ページの URL」の規則だけで探します)。"
+page_urls_tip = "一覧に無いときに試す URL の規則です (「,」区切り。先に書いたものから試し、開発サーバーが応答した最初のものを使います)。\n「フォルダ => URL」の形で、そのフォルダの中のファイルに当てはまります (「.」はプロジェクトのフォルダ)。\n{path} はフォルダからの相対パス (拡張子なし。index や README はそのフォルダ)、{dir} と {name} はその 2 つの部分、\n{year} {month} {day} {title} は「2026-11-14-題名」の形のファイル名の各部分に置き換わります。\n例: content => /{path}/, _posts => /{year}/{month}/{day}/{title}.html"
+note = "各欄の書き方は、欄にマウスを置くと表示されます。\n開いている Markdown のページの URL は、ページ一覧のコマンドの出力、ページの URL の規則の順に探します。\n見つからないときは、サイトのトップを表示します。"
 
 [settings.assoc]
 title = "関連付け"
