@@ -870,6 +870,30 @@ impl Tab {
         self.stc.set_focus();
     }
 
+    /// 今見ている場所: キャレットのある行 (1 始まり) と、画面の一番上の行 (文書の行、0 始まり)。
+    /// セッションに記録する。図のタブは (0, 0)
+    pub fn view_position(&self) -> (i32, i32) {
+        if self.is_diagram() {
+            return (0, 0);
+        }
+        let top =
+            scintilla::doc_line_from_visible(&self.stc, scintilla::first_visible_line(&self.stc));
+        (self.stc.get_current_line() + 1, top)
+    }
+
+    /// セッションから開き直したタブを、前に見ていた場所へ戻す (フォーカスは動かさない)
+    pub fn restore_view_position(&self, line: i32, top: i32) {
+        if self.is_diagram() || line <= 0 {
+            return;
+        }
+        let last = self.stc.get_line_count().max(1);
+        self.stc.goto_line(line.clamp(1, last) - 1);
+        scintilla::set_first_visible_line(
+            &self.stc,
+            scintilla::visible_from_doc_line(&self.stc, top.clamp(0, last - 1)),
+        );
+    }
+
     /// 置き場のスプリッタ。下は設定により、エディタ幅 (v1 の中) とウィンドウ幅 (v0 の中) のどちらか
     fn slot(&self, position: PanePosition) -> SplitterWindow {
         if position == PanePosition::Bottom && self.bottom_wide.get() {

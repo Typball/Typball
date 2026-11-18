@@ -37,6 +37,7 @@ pub struct Settings {
     pub window: Window,
     pub instance: Instance,
     pub export: Export,
+    pub session: SessionOptions,
 }
 
 /// 配色 (ウィンドウ・エディタ・プレビューで別々に選ぶ)
@@ -74,6 +75,43 @@ impl InstanceMode {
 #[serde(default)]
 pub struct Instance {
     pub mode: InstanceMode,
+}
+
+/// 起動したときにセッション (ウィンドウごとのタブ) を開き直すか
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionRestore {
+    /// 開き直さない (未保存だった文書だけは `files.recovery_backup` で戻る)
+    Never,
+    /// 前回が中断された (落ちた・強制終了・OS のシャットダウン) ときだけ開き直す
+    #[default]
+    Interrupted,
+    /// いつも前回のセッションを開き直す (ファイルを指定して起動したときは、中断されたときだけ)
+    Always,
+}
+
+impl SessionRestore {
+    pub const ALL: [SessionRestore; 3] = [Self::Never, Self::Interrupted, Self::Always];
+}
+
+/// セッション (`session.rs`: ウィンドウごとのタブの状態の記録)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionOptions {
+    /// 起動したときに開き直すか
+    pub restore: SessionRestore,
+    /// 自動で記録したセッションを残す数 (古いものから消す)。0 なら終了時に消す
+    /// (動いている間は、中断に備えて記録する)。名前を付けて保存したものは数えない
+    pub keep: u32,
+}
+
+impl Default for SessionOptions {
+    fn default() -> Self {
+        Self {
+            restore: SessionRestore::default(),
+            keep: 30,
+        }
+    }
 }
 
 /// 更新チャネル

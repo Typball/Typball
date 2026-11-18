@@ -38,6 +38,10 @@ pub struct Meta {
 
 /// 復元した 1 文書
 pub struct Recovered {
+    /// 書いたプロセスと、その中での文書の番号 (`Tab::backup_id`)。セッション (`session.rs`) の
+    /// タブと結び付けて、元のウィンドウの元の位置に戻すのに使う
+    pub pid: u32,
+    pub id: u64,
     pub meta: Meta,
     pub text: String,
 }
@@ -240,6 +244,11 @@ pub fn recover() -> Vec<Recovered> {
 
 fn read_dir_snapshots(dir: &Path) -> Vec<Recovered> {
     let mut out = Vec::new();
+    // フォルダの名前が、書いたプロセスの ID
+    let pid = dir
+        .file_name()
+        .and_then(|n| n.to_string_lossy().parse().ok())
+        .unwrap_or(0);
     let Ok(entries) = fs::read_dir(dir) else {
         return out;
     };
@@ -261,7 +270,12 @@ fn read_dir_snapshots(dir: &Path) -> Vec<Recovered> {
             .ok()
             .and_then(|s| toml::from_str(&s).ok())
             .unwrap_or_default();
-        out.push(Recovered { meta, text });
+        out.push(Recovered {
+            pid,
+            id,
+            meta,
+            text,
+        });
     }
     out
 }

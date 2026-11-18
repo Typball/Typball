@@ -12,6 +12,7 @@
 //! してしまい、見えている内容と入力先がずれる)。`tabs` はタブバーと同じ並び。
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::sync::mpsc::TryRecvError;
@@ -30,7 +31,9 @@ use crate::editor;
 use crate::fileio::{self, DecodeOptions, Encoding, LineEnding};
 use crate::filetype::FileType;
 use crate::i18n::{self, tr, tr_args};
-use crate::settings::{self, ExternalChange, LastTab, LineNumbers, Settings, Wrap};
+use crate::session::{self, Session, TabState, WindowState};
+use crate::session_dialog;
+use crate::settings::{self, ExternalChange, LastTab, LineNumbers, SessionRestore, Settings, Wrap};
 use crate::settings_dialog;
 use crate::tab::{status_widths, EolField, PendingSave, Tab, TabHost, STATUS_FIELD_WIDTHS};
 use crate::tabbar::{DragTarget, TabBar};
@@ -82,6 +85,10 @@ const ID_VIEW_WHITESPACE: i32 = ID_HIGHEST + 48;
 /// 編集 > タブをスペースに変換 / スペースをタブに変換 (文書全体)
 const ID_TABS_TO_SPACES: i32 = ID_HIGHEST + 49;
 const ID_SPACES_TO_TABS: i32 = ID_HIGHEST + 50;
+/// ファイル > セッション: 前回のセッションを復元 / セッションの一覧 / 名前を付けて保存
+const ID_SESSION_RESTORE: i32 = ID_HIGHEST + 51;
+const ID_SESSION_LIST: i32 = ID_HIGHEST + 52;
+const ID_SESSION_SAVE: i32 = ID_HIGHEST + 53;
 /// 文字コードを指定して開き直す (`Encoding::all` の添字)。
 /// +400 .. は他のモジュール (+60 編集 / +100 アクション / +200 ペイン / +300 更新) と重ならない
 const ID_ENC_REOPEN_BASE: i32 = ID_HIGHEST + 400;
@@ -123,6 +130,9 @@ pub struct MainWindow {
     _timer: Option<Timer<Frame>>,
     /// 外部変更のダイアログを出している間は再入しない
     checking: bool,
+    /// セッションに記録する位置と大きさ。最大化・最小化している間は、その前の値を持ち続ける
+    /// (`winplace::save` が、元に戻したときの位置と大きさを残す)
+    place: RefCell<settings::Window>,
 }
 
 pub type WindowRef = Rc<RefCell<MainWindow>>;
@@ -247,7 +257,7 @@ impl MainWindow {
 /// ウィンドウを作って表示する。`files` が空なら既定の形式の新規タブを 1 つ開く
 /// (`initial_text` があればその内容で)。
 pub fn create(files: &[PathBuf], initial_text: Option<&str>) -> WindowRef {
-    let win = build_window(None);
+    let win = build_window(None, None);
     if files.is_empty() {
         new_tab(&win, default_filetype(&settings::get()), initial_text);
     } else {
@@ -260,18 +270,36 @@ pub fn create(files: &[PathBuf], initial_text: Option<&str>) -> WindowRef {
 
 /// タブ無しのウィンドウ (タブの移動用)。`position` を指定しなければ設定の位置
 fn create_empty(position: Option<Point>) -> WindowRef {
-    build_window(position)
+    build_window(position, None)
 }
 
-/// フレーム・メニュー・タブバー・ステータスバーを作って表示する (タブは入れない)
-fn build_window(position: Option<Point>) -> WindowRef {
+/// フレーム・メニュー・タブバー・ステータスバーを作って表示する (タブは入れない)。
+/// `place` はセッションから開き直すウィンドウの位置と大きさ (無ければ設定のもの)
+fn build_window(position: Option<Point>, place: Option<&settings::Window>) -> WindowRef {
     let settings = settings::get();
-    let offset = all_windows().len() as i32 * 30;
+    // 設定の位置に出すときは、先にあるウィンドウと重ならないよう少しずつずらす。
+    // セッションから開き直すときは、記録した位置そのまま
+    let offset = match place {
+        Some(_) => 0,
+        None => all_windows().len() as i32 * 30,
+    };
+    let saved = match place {
+        // 大きさの記録が無い (最大化したままだった) なら、設定の大きさを使う
+        Some(place) => settings::Window {
+            width: place.width.or(settings.window.width),
+            height: place.height.or(settings.window.height),
+            ..place.clone()
+        },
+        None => settings.window.clone(),
+    };
+    // 最大化は、位置の指定が無い (切り離したタブのウィンドウではない) 最初のウィンドウと、
+    // セッションから開き直すウィンドウで戻す
+    let maximize = saved.maximized && offset == 0 && position.is_none();
 
     // ウィンドウは位置・サイズ・中身をすべて決めてから表示する (起動時のちらつき防止)。
     // サイズは作ったあと、置き先のモニターの拡大率で DIP から換算して当てる (winplace::restore)
     let mut builder = Frame::builder().with_title("Typball");
-    let saved_position = match (settings.window.x, settings.window.y) {
+    let saved_position = match (saved.x, saved.y) {
         (Some(x), Some(y)) => Some(Point::new(x + offset, y + offset)),
         _ => None,
     };
@@ -280,7 +308,7 @@ fn build_window(position: Option<Point>) -> WindowRef {
         builder = builder.with_position(p);
     }
     let frame = builder.build();
-    crate::winplace::restore(&frame, &settings.window, position);
+    crate::winplace::restore(&frame, &saved, position);
     crate::appicon::apply(&frame);
     let status = frame.create_status_bar(
         STATUS_FIELD_WIDTHS.len() as i32,
@@ -337,6 +365,7 @@ fn build_window(position: Option<Point>) -> WindowRef {
         tabs: Vec::new(),
         _timer: None,
         checking: false,
+        place: RefCell::new(saved),
     }));
     WINDOWS.with(|w| w.borrow_mut().push(win.clone()));
     set_active(&win);
@@ -432,6 +461,8 @@ fn build_window(position: Option<Point>) -> WindowRef {
                 return;
             }
             save_window_geometry(&win.borrow().frame);
+            // セッションに残す、閉じる直前の状態 (未保存の確認で保存した文書は、もう保存先を持っている)
+            let state = window_state(&win.borrow()).unwrap_or_default();
             // Mermaid を描く見えない WebView がこのウィンドウにあれば手放す (次に使うときに作り直される)
             crate::mermaid::release(&win.borrow().host.pages);
             // 閉じるタブのスナップショットは要らない (未保存の確認は済んでいる)
@@ -441,8 +472,15 @@ fn build_window(position: Option<Point>) -> WindowRef {
                 backup::remove(tab.backup_id());
             }
             unregister(&win);
+            let now = session::now();
             if all_windows().is_empty() {
                 backup::discard_own();
+                // 最後のウィンドウ: セッションを締める (このウィンドウが「開いていたウィンドウ」になる)
+                session::finish(state, &now);
+            } else {
+                // 他のウィンドウは残る: 閉じたウィンドウとして覚えておく (セッションの一覧から開き直せる)
+                session::window_closed(state, &now);
+                record_session();
             }
             event.skip(true);
         }
@@ -478,6 +516,7 @@ fn build_window(position: Option<Point>) -> WindowRef {
                 ticks.set(n);
                 if n % BACKUP_EVERY_TICKS == 0 {
                     backup_tick(&win);
+                    record_session();
                 }
             }
         }
@@ -485,9 +524,11 @@ fn build_window(position: Option<Point>) -> WindowRef {
     timer.start(EXTERNAL_CHECK_MS, false);
     win.borrow_mut()._timer = Some(timer);
 
-    if settings.window.maximized && offset == 0 && position.is_none() {
+    if maximize {
         frame.maximize(true);
     }
+    #[cfg(windows)]
+    end_session::watch(&frame);
     frame.show(true);
     win
 }
@@ -776,6 +817,27 @@ pub fn build_menu_bar(win: &WindowRef) {
         &tr("menu.help_text.move_tab"),
         ItemKind::Normal,
     );
+    file.append_separator();
+    // セッション (ウィンドウごとのタブの状態)。記録は自動なので、ここにあるのは開き直す操作と、名前を付けた保存
+    let sessions = Menu::builder()
+        .append_item(
+            ID_SESSION_RESTORE,
+            &tr("menu.session_restore"),
+            &tr("menu.help_text.session_restore"),
+        )
+        .append_item(
+            ID_SESSION_LIST,
+            &tr("menu.session_list"),
+            &tr("menu.help_text.session_list"),
+        )
+        .append_separator()
+        .append_item(
+            ID_SESSION_SAVE,
+            &tr("menu.session_save"),
+            &tr("menu.help_text.session_save"),
+        )
+        .build();
+    file.append_submenu(sessions, &tr("menu.session"), "");
     file.append_separator();
     file.append(
         ID_EXIT,
@@ -1300,17 +1362,10 @@ fn handle_menu(win: &WindowRef, id: i32) {
         ID_PREFERENCES => open_settings(win),
         ID_ABOUT => show_about(&win.borrow().frame),
         ID_CHECK_UPDATE => update_dialog::check_now(win),
-        ID_EXIT => {
-            for w in all_windows() {
-                let frame = w.borrow().frame;
-                // close() は on_close を同期的に呼ぶ。キャンセルされた (まだ登録に残っている)
-                // ウィンドウがあればそこで止める
-                frame.close(false);
-                if all_windows().iter().any(|x| Rc::ptr_eq(x, &w)) {
-                    break;
-                }
-            }
-        }
+        ID_EXIT => quit(),
+        ID_SESSION_RESTORE => restore_previous_session(win),
+        ID_SESSION_LIST => show_sessions(win),
+        ID_SESSION_SAVE => save_session_as(win),
         id if (ID_NEW_TYPE_BASE..ID_NEW_TYPE_BASE + FileType::ALL.len() as i32).contains(&id) => {
             let ft = FileType::ALL[(id - ID_NEW_TYPE_BASE) as usize];
             new_tab(win, ft, None);
@@ -1710,42 +1765,28 @@ pub fn open_file(win: &WindowRef, path: &Path) -> Option<Tab> {
 }
 
 /// 前回落ちたときのスナップショットを「未保存の変更あり」のタブとして開く
-pub fn restore_recovered(win: &WindowRef, items: Vec<backup::Recovered>) {
-    if items.is_empty() {
-        return;
-    }
-    let count = items.len();
-    for item in items {
-        let filetype = FileType::from_extension(&item.meta.filetype);
-        let mut doc = match item.meta.path.as_deref().map(PathBuf::from) {
-            Some(path) => {
-                let mut doc = Document::untitled(filetype, 0);
-                doc.set_path(path);
-                // ディスクの (古い) 内容は確認済みの扱い: 読み直すか聞かない
-                doc.acknowledge_external();
-                doc
-            }
-            None => Document::untitled(filetype, next_untitled_number()),
-        };
-        if let Some(encoding) = Encoding::parse(&item.meta.encoding) {
-            doc.encoding = encoding;
+fn add_recovered_tab(win: &WindowRef, item: backup::Recovered) -> Tab {
+    let filetype = FileType::from_extension(&item.meta.filetype);
+    let mut doc = match item.meta.path.as_deref().map(PathBuf::from) {
+        Some(path) => {
+            let mut doc = Document::untitled(filetype, 0);
+            doc.set_path(path);
+            // ディスクの (古い) 内容は確認済みの扱い: 読み直すか聞かない
+            doc.acknowledge_external();
+            doc
         }
-        let blank = win.borrow().current_tab().filter(is_blank);
-        let tab = add_tab(win, doc, &item.text, true, None);
-        tab.set_backup_dirty();
-        if let Some(blank) = blank {
-            remove_tab(win, &blank);
-        }
+        None => Document::untitled(filetype, next_untitled_number()),
+    };
+    if let Some(encoding) = Encoding::parse(&item.meta.encoding) {
+        doc.encoding = encoding;
     }
-    let frame = win.borrow().frame;
-    MessageDialog::builder(
-        &frame,
-        &tr_args("dialog.recovered", &[("n", &count.to_string())]),
-        "Typball",
-    )
-    .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconInformation)
-    .build()
-    .show_modal();
+    let blank = win.borrow().current_tab().filter(is_blank);
+    let tab = add_tab(win, doc, &item.text, true, None);
+    tab.set_backup_dirty();
+    if let Some(blank) = blank {
+        remove_tab(win, &blank);
+    }
+    tab
 }
 
 pub fn open_files(win: &WindowRef, paths: &[PathBuf]) {
@@ -2373,6 +2414,8 @@ pub fn open_paths() -> Vec<PathBuf> {
 /// 確認なしに全ウィンドウを閉じる (更新を適用して新しい Typball を起動した後)
 pub fn close_all_for_restart() {
     RESTARTING.with(|r| r.set(true));
+    // 全ウィンドウを「開いていたウィンドウ」としてセッションに残す
+    session::begin_quit(false);
     for w in all_windows() {
         let frame = w.borrow().frame;
         frame.close(true);
@@ -2722,4 +2765,462 @@ fn save_window_geometry(frame: &Frame) {
     crate::winplace::save(frame, &mut s.window);
     settings::set(s.clone());
     let _ = s.save();
+}
+
+// ---------------------------------------------------------------------------
+// セッション (ウィンドウごとのタブの状態の記録と復元。ファイルの読み書きは session.rs)
+// ---------------------------------------------------------------------------
+
+/// セッションに記録する、タブ 1 つ分の状態。文書を借りられなければ None
+fn tab_state(tab: &Tab) -> Option<TabState> {
+    let doc = tab.doc.try_borrow().ok()?;
+    let (line, top) = tab.view_position();
+    Some(TabState {
+        path: doc.path.as_ref().map(|p| p.display().to_string()),
+        filetype: doc.filetype.extension().to_string(),
+        encoding: doc.encoding.id(),
+        forced: doc.forced_encoding.is_some(),
+        untitled: if doc.path.is_none() { doc.untitled } else { 0 },
+        // 無題のタブだけ: 書きかけの内容があるか (終わったセッションの一覧に「無題もあった」と出すため)
+        modified: doc.path.is_none() && tab.is_modified(),
+        snapshot: Some(tab.backup_id()),
+        line,
+        top,
+    })
+}
+
+/// セッションに記録する、ウィンドウ 1 つ分の状態 (位置と大きさ・タブの並び・選んでいるタブ)
+fn window_state(w: &MainWindow) -> Option<WindowState> {
+    let tabs: Vec<TabState> = w.tabs.iter().map(tab_state).collect::<Option<_>>()?;
+    let mut place = w.place.try_borrow_mut().ok()?;
+    crate::winplace::save(&w.frame, &mut place);
+    Some(WindowState {
+        x: place.x,
+        y: place.y,
+        width: place.width,
+        height: place.height,
+        maximized: place.maximized,
+        active: w.host.tabbar.selected().unwrap_or(0),
+        closed: String::new(),
+        tabs,
+    })
+}
+
+/// 開いている全ウィンドウの状態。借りられないウィンドウがあれば (何かの処理の途中) None
+fn open_window_states() -> Option<Vec<WindowState>> {
+    all_windows()
+        .iter()
+        .map(|win| window_state(&*win.try_borrow().ok()?))
+        .collect()
+}
+
+/// 開いている全ウィンドウの状態をセッションに記録する (数秒ごと・ウィンドウを閉じたとき)。
+/// 前に書いたものと同じなら何も書かない
+fn record_session() {
+    if let Some(open) = open_window_states() {
+        session::record(open, &session::now());
+    }
+}
+
+/// すべてのウィンドウを閉じて終了する (ファイル > 終了)。閉じたウィンドウは全部、セッションの
+/// 「終了時に開いていたウィンドウ」になる (ウィンドウを 1 つずつ閉じたときは、最後の 1 つだけ)
+fn quit() {
+    session::begin_quit(false);
+    for w in all_windows() {
+        let frame = w.borrow().frame;
+        // close() は on_close を同期的に呼ぶ。キャンセルされた (まだ登録に残っている)
+        // ウィンドウがあればそこで止める
+        frame.close(false);
+        if all_windows().iter().any(|x| Rc::ptr_eq(x, &w)) {
+            // 終了をやめた: それまでに閉じたウィンドウは「途中で閉じたウィンドウ」に回す
+            session::cancel_quit(&session::now());
+            record_session();
+            break;
+        }
+    }
+}
+
+/// OS のシャットダウン (サインアウト・再起動) が決まった / 取り消された
+#[cfg(windows)]
+fn end_session_decided(ending: bool) {
+    let now = session::now();
+    if ending {
+        // この後すぐプロセスが終わるので、書き終わるまで待つ。正常終了の印は付かないので、
+        // 次の起動で「中断された」セッションとして開き直せる (未保存の内容はスナップショットから)
+        if let Some(open) = open_window_states() {
+            session::record_now(open, &now);
+        }
+    } else {
+        session::cancel_quit(&now);
+        record_session();
+    }
+}
+
+/// OS のシャットダウンの知らせ (WM_QUERYENDSESSION / WM_ENDSESSION) を受ける。
+///
+/// wx はシャットダウンの問い合わせを受けると、最初のウィンドウだけを閉じる (wxApp::OnQueryEndSession)。
+/// 何もしないと、そのウィンドウだけが「途中で閉じたウィンドウ」になって、次の起動で戻らない。
+/// 問い合わせの時点で「終了の途中」にしておき、シャットダウンが決まったら残りのウィンドウも書く
+#[cfg(windows)]
+mod end_session {
+    use std::ffi::c_void;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    use wxdragon::prelude::*;
+
+    type Hwnd = *mut c_void;
+    type SubclassProc = unsafe extern "system" fn(Hwnd, u32, usize, isize, usize, usize) -> isize;
+
+    const WM_QUERYENDSESSION: u32 = 0x0011;
+    const WM_ENDSESSION: u32 = 0x0016;
+    const WM_NCDESTROY: u32 = 0x0082;
+    const SUBCLASS_ID: usize = 0x7479_7073; // "typs"
+
+    #[link(name = "comctl32")]
+    extern "system" {
+        fn SetWindowSubclass(hwnd: Hwnd, pfn: SubclassProc, id: usize, ref_data: usize) -> i32;
+        fn RemoveWindowSubclass(hwnd: Hwnd, pfn: SubclassProc, id: usize) -> i32;
+        fn DefSubclassProc(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
+    }
+
+    pub fn watch(frame: &Frame) {
+        let hwnd = frame.get_handle();
+        if hwnd.is_null() {
+            return;
+        }
+        // SAFETY: hwnd は生存中のウィンドウ。手続きは WM_NCDESTROY で自分を外す
+        unsafe {
+            SetWindowSubclass(hwnd as Hwnd, subclass_proc, SUBCLASS_ID, 0);
+        }
+    }
+
+    unsafe extern "system" fn subclass_proc(
+        hwnd: Hwnd,
+        msg: u32,
+        wparam: usize,
+        lparam: isize,
+        _id: usize,
+        _data: usize,
+    ) -> isize {
+        // パニックを Windows の呼び出し元へ伝えない
+        match msg {
+            WM_QUERYENDSESSION => {
+                let _ = catch_unwind(|| crate::session::begin_quit(true));
+            }
+            WM_ENDSESSION => {
+                let _ = catch_unwind(AssertUnwindSafe(|| super::end_session_decided(wparam != 0)));
+            }
+            WM_NCDESTROY => {
+                RemoveWindowSubclass(hwnd, subclass_proc, SUBCLASS_ID);
+            }
+            _ => {}
+        }
+        DefSubclassProc(hwnd, msg, wparam, lparam)
+    }
+}
+
+/// 落ちたプロセスのスナップショット: (書いたプロセス, 文書の番号) → 中身
+type Snapshots = HashMap<(u32, u64), backup::Recovered>;
+
+/// セッションから開き直した結果
+#[derive(Default)]
+struct Restored {
+    windows: Vec<WindowRef>,
+    /// 開いたタブ
+    tabs: usize,
+    /// そのうち、未保存だった内容をスナップショットから戻したもの
+    recovered: usize,
+    /// 見つからなかったファイル
+    missing: usize,
+    /// もう開いていたファイル
+    already_open: usize,
+}
+
+impl Restored {
+    fn merge(&mut self, other: Restored) {
+        self.windows.extend(other.windows);
+        self.tabs += other.tabs;
+        self.recovered += other.recovered;
+        self.missing += other.missing;
+        self.already_open += other.already_open;
+    }
+
+    /// ステータスバーに出す文
+    fn summary(&self) -> String {
+        if self.tabs == 0 && self.missing == 0 && self.already_open == 0 {
+            return tr("status.session_nothing");
+        }
+        let mut text = tr_args(
+            "status.session_restored",
+            &[
+                ("windows", &self.windows.len().to_string()),
+                ("tabs", &self.tabs.to_string()),
+            ],
+        );
+        if self.missing > 0 {
+            text.push_str(&tr_args(
+                "status.session_missing",
+                &[("n", &self.missing.to_string())],
+            ));
+        }
+        if self.already_open > 0 {
+            text.push_str(&tr_args(
+                "status.session_already_open",
+                &[("n", &self.already_open.to_string())],
+            ));
+        }
+        text
+    }
+}
+
+/// そのファイルを開いているタブが、どれかのウィンドウにあるか
+fn is_open_anywhere(path: &Path) -> bool {
+    all_windows()
+        .iter()
+        .any(|w| w.borrow().tab_for_path(path).is_some())
+}
+
+/// セッションのウィンドウを開き直す。ウィンドウごとに新しいウィンドウを作り、記録した位置と大きさで出す。
+///
+/// - `snapshots` に、そのタブの未保存の内容 (`pid` のプロセスが書いたスナップショット) があれば、
+///   ディスクのファイルの代わりにそれを「未保存の変更あり」で開く (使ったものは `snapshots` から抜く)
+/// - もうどこかのウィンドウで開いているファイルと、見つからないファイルは飛ばす
+/// - 開くタブが 1 つも無いウィンドウは作らない
+fn restore_windows(states: &[WindowState], pid: u32, snapshots: &mut Snapshots) -> Restored {
+    enum Source {
+        Snapshot(backup::Recovered),
+        File(PathBuf),
+    }
+    let mut out = Restored::default();
+    for state in states {
+        // 開くものを先に決める (何も無ければウィンドウを作らない)
+        let mut plan: Vec<(usize, Source)> = Vec::new();
+        for (i, tab) in state.tabs.iter().enumerate() {
+            let snapshot = tab.snapshot.and_then(|id| snapshots.remove(&(pid, id)));
+            if let Some(item) = snapshot {
+                plan.push((i, Source::Snapshot(item)));
+                continue;
+            }
+            let Some(path) = tab.path.as_deref().map(PathBuf::from) else {
+                continue;
+            };
+            if is_open_anywhere(&path)
+                || plan
+                    .iter()
+                    .any(|(_, s)| matches!(s, Source::File(p) if *p == path))
+            {
+                out.already_open += 1;
+            } else if !path.is_file() {
+                out.missing += 1;
+            } else {
+                plan.push((i, Source::File(path)));
+            }
+        }
+        if plan.is_empty() {
+            continue;
+        }
+        let place = settings::Window {
+            width: state.width,
+            height: state.height,
+            x: state.x,
+            y: state.y,
+            maximized: state.maximized,
+        };
+        let win = build_window(None, Some(&place));
+        let mut active = None;
+        for (i, source) in plan {
+            let saved = &state.tabs[i];
+            let tab = match source {
+                Source::Snapshot(item) => {
+                    out.recovered += 1;
+                    Some(add_recovered_tab(&win, item))
+                }
+                Source::File(path) => open_restored_file(&win, &path, saved),
+            };
+            let Some(tab) = tab else {
+                continue;
+            };
+            tab.restore_view_position(saved.line, saved.top);
+            out.tabs += 1;
+            if i == state.active {
+                active = Some(tab);
+            }
+        }
+        if win.borrow().tabs.is_empty() {
+            // どれも開けなかった (大きすぎる・読めない): 空のウィンドウにしない
+            new_tab(&win, default_filetype(&settings::get()), None);
+        }
+        // 選んでいたタブを選び直す (開けなかったら先頭)
+        let index = active.and_then(|tab| tab.index()).unwrap_or(0);
+        select_tab(&win, index);
+        out.windows.push(win);
+    }
+    out
+}
+
+/// セッションに記録されていたファイルを開く。文字コードを指定して開いていたなら、同じ文字コードで読む
+fn open_restored_file(win: &WindowRef, path: &Path, saved: &TabState) -> Option<Tab> {
+    let frame = win.borrow().frame;
+    let settings = settings::get();
+    let mut options = document::decode_options(&settings);
+    if saved.forced {
+        options.forced = Encoding::parse(&saved.encoding);
+    }
+    let loaded = load_with_checks(&frame, path, options, &settings)?;
+    let tab = add_tab(win, loaded.doc.clone(), &loaded.text, false, None);
+    after_load_notices(&frame, &tab, &loaded);
+    Some(tab)
+}
+
+/// 起動時: 中断された (落ちた・強制終了・OS のシャットダウン) セッションのウィンドウを開き直し、
+/// 未保存だった文書をスナップショットから戻す。設定が「いつも復元」なら、中断されていなくても
+/// 前回のセッションを開き直す (`opening_files`: ファイルを指定して起動したときは、中断されたときだけ)。
+/// ウィンドウを作ったら、そのうち最後にアクティブになったものを返す
+pub fn restore_at_startup(settings: &Settings, opening_files: bool) -> Option<WindowRef> {
+    let mut snapshots: Snapshots = if settings.files.recovery_backup {
+        backup::recover()
+            .into_iter()
+            .map(|item| ((item.pid, item.id), item))
+            .collect()
+    } else {
+        HashMap::new()
+    };
+    // 中断されたセッションは、復元しない設定でも引き取っておく (一覧では「中断」と出る)
+    let interrupted = session::take_interrupted();
+    let mut restored = Restored::default();
+    let mut from_session = false;
+    match settings.session.restore {
+        SessionRestore::Never => {}
+        _ if !interrupted.is_empty() => {
+            for s in &interrupted {
+                restored.merge(restore_windows(&s.open_windows(), s.pid, &mut snapshots));
+            }
+            from_session = true;
+        }
+        SessionRestore::Always if !opening_files => {
+            if let Some(s) = session::previous() {
+                restored.merge(restore_windows(
+                    &s.open_windows(),
+                    s.pid,
+                    &mut HashMap::new(),
+                ));
+                from_session = true;
+            }
+        }
+        _ => {}
+    }
+    // セッションのタブに結び付かなかったスナップショット (セッションを復元しない設定、
+    // セッションを書く前に落ちた、など) は、1 つのウィンドウにまとめて開く
+    if !snapshots.is_empty() {
+        let mut items: Vec<backup::Recovered> = snapshots.into_values().collect();
+        items.sort_by_key(|item| (item.pid, item.id));
+        let target = match restored.windows.first() {
+            Some(win) => win.clone(),
+            None => create(&[], None),
+        };
+        for item in items {
+            add_recovered_tab(&target, item);
+            restored.recovered += 1;
+            restored.tabs += 1;
+        }
+        if restored.windows.is_empty() {
+            restored.windows.push(target);
+        }
+    }
+    let win = active_window().filter(|_| !restored.windows.is_empty())?;
+    let frame = win.borrow().frame;
+    if from_session {
+        status(&frame, &restored.summary());
+    }
+    if restored.recovered > 0 {
+        MessageDialog::builder(
+            &frame,
+            &tr_args(
+                "dialog.recovered",
+                &[("n", &restored.recovered.to_string())],
+            ),
+            "Typball",
+        )
+        .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconInformation)
+        .build()
+        .show_modal();
+    }
+    Some(win)
+}
+
+/// 何も開いていないウィンドウか (無題で未変更のタブが 1 つだけ)。セッションを開き直したら閉じてよい
+fn is_pristine(win: &WindowRef) -> bool {
+    let w = win.borrow();
+    w.tabs.len() == 1
+        && w.tabs
+            .iter()
+            .all(|t| t.doc.borrow().path.is_none() && !t.is_modified())
+}
+
+/// セッションのウィンドウを開き直して、結果をステータスバーに出す (メニューと一覧の画面から)。
+/// 呼び出したウィンドウが何も開いていなければ、開き直した後で閉じる
+fn restore_from_menu(win: &WindowRef, states: &[WindowState]) {
+    let pristine = is_pristine(win);
+    let restored = restore_windows(states, 0, &mut HashMap::new());
+    // この起動中に閉じたウィンドウを開き直したなら、「閉じたウィンドウ」の一覧からは外す
+    session::forget_closed(states);
+    let summary = restored.summary();
+    let target = restored.windows.last().unwrap_or(win).clone();
+    let frame = target.borrow().frame;
+    status(&frame, &summary);
+    if restored.windows.is_empty() {
+        return;
+    }
+    frame.raise();
+    if pristine {
+        let own = win.borrow().frame;
+        own.close(false);
+    }
+}
+
+/// ファイル > セッション > 前回のセッションを復元
+fn restore_previous_session(win: &WindowRef) {
+    match session::previous() {
+        Some(s) => restore_from_menu(win, &s.open_windows()),
+        None => {
+            let frame = win.borrow().frame;
+            status(&frame, &tr("status.session_none"));
+        }
+    }
+}
+
+/// 今のセッションの中身 (開いているウィンドウと、この実行中に閉じたウィンドウ)
+fn current_session() -> Option<Session> {
+    session::snapshot(open_window_states()?, &session::now())
+}
+
+/// ファイル > セッション > セッションの一覧: 過去のセッションを見て、選んだウィンドウ (タブ) を開き直す
+fn show_sessions(win: &WindowRef) {
+    let frame = win.borrow().frame;
+    let _paused = pause_checks(win);
+    let chosen = session_dialog::show(&frame, current_session());
+    drop(_paused);
+    if let Some(states) = chosen {
+        restore_from_menu(win, &states);
+    }
+}
+
+/// ファイル > セッション > 今のセッションに名前を付けて保存
+fn save_session_as(win: &WindowRef) {
+    let frame = win.borrow().frame;
+    let Some(current) = current_session() else {
+        return;
+    };
+    if current
+        .open_windows()
+        .iter()
+        .all(|w| w.tabs.iter().all(|t| t.path.is_none()))
+    {
+        status(&frame, &tr("status.session_no_files"));
+        return;
+    }
+    let _paused = pause_checks(win);
+    if let Some(name) = session_dialog::save_as(&frame, &current, "") {
+        status(&frame, &tr_args("status.session_saved", &[("name", &name)]));
+    }
 }

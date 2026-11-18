@@ -29,6 +29,8 @@
 //! - `update_dialog.rs`   更新のダイアログと進捗表示 (ヘルプ → 更新を確認、起動時の自動確認)
 //! - `instance.rs`        シングルインスタンス (2 つ目の起動は先行プロセスにファイルを渡して終わる)
 //! - `fonts.rs`           同梱フォント (Noto Sans JP・UDEV Gothic) を OS にプロセス専用で登録する
+//! - `session.rs`         セッション (ウィンドウごとのタブの状態) の記録。設定フォルダの Session/ に起動ごとに 1 ファイル
+//! - `session_dialog.rs`  セッションの一覧 (過去のセッションを見て、選んだウィンドウを開き直す)
 //! - `settings.rs`        設定の構造体と TOML ファイル (Settings.toml) の読み書き
 //! - `settings_dialog.rs` 設定ダイアログ
 //! - `i18n.rs`            UI 文字列の多言語対応
@@ -69,6 +71,8 @@ mod pane;
 mod preview;
 mod previewbar;
 mod scintilla;
+mod session;
+mod session_dialog;
 mod settings;
 mod settings_dialog;
 mod shortcode;
@@ -220,15 +224,23 @@ fn main() {
         // Typst の既定フォント (文書が #set text(font:) で指定しないときに使う)
         typball_core::set_default_text(&loaded.preview.font_face, loaded.preview.font_size as f64);
 
-        let mut win = open_at_startup(args.mode, args.files, &loaded);
-        // 前回落ちた (強制終了した) ときに保存されていなかった文書があれば開き直す
-        if loaded.files.recovery_backup {
-            let recovered = backup::recover();
-            if !recovered.is_empty() {
-                let target = win.get_or_insert_with(|| window::create(&[], None)).clone();
-                window::restore_recovered(&target, recovered);
+        // セッション (ウィンドウごとのタブの状態) の記録を始める。前回が中断された (落ちた・強制終了・
+        // OS のシャットダウン) なら、そのときのウィンドウとタブを開き直し、保存されていなかった文書を戻す
+        // (設定によっては、中断されていなくても前回のセッションを開き直す)
+        session::start(&session::now());
+        let restored = window::restore_at_startup(&loaded, !args.files.is_empty());
+        let win = match restored {
+            // 開き直したウィンドウがある: 起動時に渡されたファイルはそこへ足す
+            Some(win) => {
+                let (view, edit) = split_by_mode(args.mode, args.files, &loaded);
+                viewer::open(&view);
+                window::open_files(&win, &edit);
+                Some(win)
             }
-        }
+            None => open_at_startup(args.mode, args.files, &loaded),
+        };
+        // 古いセッションを片付ける (別スレッド)
+        session::prune(loaded.session.keep as usize);
         if let (Some(win), Some(e)) = (&win, load_error) {
             win.borrow()
                 .frame

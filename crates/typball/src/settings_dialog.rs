@@ -19,7 +19,7 @@ use crate::i18n::{self, tr, tr_args};
 use crate::settings::{
     self, AutoIndent, Backspace, BottomWidth, Channel, ExternalChange, InstanceMode, LastTab,
     LineNumbers, MarkdownMode, OpenMode, Panes, PanesOverride, RulerTabs, SaveMethod, SavedChanges,
-    Settings, Theme, Wrap,
+    SessionRestore, Settings, Theme, Wrap,
 };
 
 /// OK が押されたときに呼ばれる読み戻し処理の集まり
@@ -418,11 +418,53 @@ fn page_general(panel: &Panel, current: &Settings, readers: &mut Readers, _dialo
     );
     grid.add(&instance, 0, SizerFlag::AlignLeft, 0);
 
+    // セッション: 起動したときに開き直すか、過去のセッションをいくつ残すか
+    let session_restore = choice_with(
+        panel,
+        SessionRestore::ALL
+            .iter()
+            .map(|v| tr(session_restore_key(*v)))
+            .collect(),
+    );
+    let selected = SessionRestore::ALL
+        .iter()
+        .position(|v| *v == current.session.restore)
+        .unwrap_or(0);
+    session_restore.set_selection(selected as u32);
+    grid.add(
+        &label(panel, "settings.general.session_restore"),
+        0,
+        LABEL_FLAGS,
+        0,
+    );
+    grid.add(&session_restore, 0, SizerFlag::AlignLeft, 0);
+    let session_keep = SpinCtrl::builder(panel)
+        .with_range(0, 1000)
+        .with_initial_value(current.session.keep.min(1000) as i32)
+        .build();
+    grid.add(
+        &label(panel, "settings.general.session_keep"),
+        0,
+        LABEL_FLAGS,
+        0,
+    );
+    grid.add(&session_keep, 0, SizerFlag::AlignLeft, 0);
+    let session_note = StaticText::builder(panel)
+        .with_label(&tr("settings.general.session_note"))
+        .build();
+
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
     sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
+    sizer.add(
+        &session_note,
+        0,
+        SizerFlag::Expand | SizerFlag::All,
+        px(GAP),
+    );
     sizer.add(&note, 0, SizerFlag::Expand | SizerFlag::All, px(GAP));
     panel.set_sizer(sizer, true);
     note.wrap(px(360));
+    session_note.wrap(px(540));
 
     readers.push(Box::new(move |s| {
         let idx = choice.get_selection().unwrap_or(0) as usize;
@@ -438,7 +480,18 @@ fn page_general(panel: &Panel, current: &Settings, readers: &mut Readers, _dialo
         s.general.last_tab = LastTab::ALL.get(idx).copied().unwrap_or_default();
         let idx = instance.get_selection().unwrap_or(0) as usize;
         s.instance.mode = InstanceMode::ALL.get(idx).copied().unwrap_or_default();
+        let idx = session_restore.get_selection().unwrap_or(0) as usize;
+        s.session.restore = SessionRestore::ALL.get(idx).copied().unwrap_or_default();
+        s.session.keep = session_keep.value().max(0) as u32;
     }));
+}
+
+fn session_restore_key(value: SessionRestore) -> &'static str {
+    match value {
+        SessionRestore::Never => "settings.general.session_restore_never",
+        SessionRestore::Interrupted => "settings.general.session_restore_interrupted",
+        SessionRestore::Always => "settings.general.session_restore_always",
+    }
 }
 
 fn instance_mode_key(value: InstanceMode) -> &'static str {
